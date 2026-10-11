@@ -1,6 +1,5 @@
 # Terraform (terraform/ also has its own .gitignore)
 .terraform/
-.docs/
 *.tfstate
 *.tfstate.*
 *.tfvars
@@ -28,3 +27,4 @@ __pycache__/
 .DS_Store
 Thumbs.db
 ~$*.docx
+.docs/
