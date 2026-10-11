@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}KubeMart{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="{{ url_for('index') }}">KubeMart</a>
+    <span class="env env-{{ environment }}">{{ environment }}</span>
+    <nav>
+      <a href="{{ url_for('index') }}">Shop</a>
+      <a href="{{ url_for('view_orders') }}">Orders</a>
+      <a class="cart-link" href="{{ url_for('view_cart') }}">Cart ({{ cart_count|default(0) }})</a>
+    </nav>
+  </header>
+
+  <main>
+    {% with messages = get_flashed_messages() %}
+      {% for message in messages %}<div class="flash">{{ message }}</div>{% endfor %}
+    {% endwith %}
+    {% block content %}{% endblock %}
+  </main>
+
+  <footer>
+    Served by pod <code>{{ pod_name }}</code> &middot;
+    frontend (Python) &middot; catalog (Go) &middot; cart (Rust) &middot; orders (Java) &middot; payment (Python)
+  </footer>
+</body>
+</html>

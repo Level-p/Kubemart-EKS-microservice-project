@@ -1,0 +1,36 @@
+# Elasticsearch cluster managed by the ECK operator.
+# ECK creates a StatefulSet "<name>-es-default" with one EBS volume per node,
+# a Service "<name>-es-http" (port 9200, TLS) and the password Secret
+# "<name>-es-elastic-user" (user: elastic).
+apiVersion: elasticsearch.k8s.elastic.co/v1
+kind: Elasticsearch
+metadata:
+  name: {{ .Values.name }}
+spec:
+  version: {{ .Values.version }}
+  nodeSets:
+    - name: default
+      count: {{ .Values.elasticsearch.nodeCount }}
+      config:
+        # Avoids having to raise vm.max_map_count on the worker nodes
+        node.store.allow_mmap: false
+      podTemplate:
+        spec:
+          containers:
+            - name: elasticsearch
+              resources:
+                requests:
+                  cpu: {{ .Values.elasticsearch.cpu }}
+                  memory: {{ .Values.elasticsearch.memory }}
+                limits:
+                  memory: {{ .Values.elasticsearch.memory }}
+      volumeClaimTemplates:
+        # The name must be "elasticsearch-data"
+        - metadata:
+            name: elasticsearch-data
+          spec:
+            accessModes: ["ReadWriteOnce"]
+            storageClassName: {{ .Values.elasticsearch.storageClass }}
+            resources:
+              requests:
+                storage: {{ .Values.elasticsearch.storageSize }}

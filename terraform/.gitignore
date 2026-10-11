@@ -1,0 +1,37 @@
+# Local .terraform directories
+.terraform/
+
+# State files (state lives in S3)
+*.tfstate
+*.tfstate.*
+
+# Crash logs
+crash.log
+crash.*.log
+
+# Variable files can contain secrets
+*.tfvars
+*.tfvars.json
+
+# Override files
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# Plan output
+*.tfplan
+tfplan
+
+# CLI configuration
+.terraformrc
+terraform.rc
+
+# Keys and kubeconfigs
+*.pem
+*.ppk
+*.key
+kubeconfig*
+
+# Scanner output
+checkov-results.xml

@@ -1,0 +1,23 @@
+# Argo CD project: limits KubeMart applications to this Git repo and the two
+# KubeMart namespaces. (Terraform in terraform/ creates the same
+# objects through the argocd-apps Helm chart; these files are for learning or
+# for applying by hand with: kubectl apply -n argocd -f argocd/)
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: kubemart
+  namespace: argocd
+spec:
+  description: KubeMart e-commerce microservices
+  sourceRepos:
+    - https://github.com/your-github-user/kubemart.git
+  destinations:
+    - server: https://kubernetes.default.svc
+      namespace: kubemart-stage
+    - server: https://kubernetes.default.svc
+      namespace: kubemart-prod
+  # Namespaced resources only: the app cannot create cluster-wide objects
+  clusterResourceWhitelist: []
+  namespaceResourceWhitelist:
+    - group: "*"
+      kind: "*"

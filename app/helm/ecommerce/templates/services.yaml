@@ -1,0 +1,19 @@
+{{- $root := . -}}
+{{- range $name, $svc := .Values.services }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "kubemart.labels" (dict "root" $root "name" $name) | nindent 4 }}
+    kubemart/app-service: "true"   # selected by the ServiceMonitors
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "kubemart.selectorLabels" (dict "root" $root "name" $name) | nindent 4 }}
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+{{- end }}

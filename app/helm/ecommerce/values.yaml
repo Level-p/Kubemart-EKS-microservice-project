@@ -1,0 +1,209 @@
+# Base values shared by every environment.
+# values-stage.yaml and values-prod.yaml override them (Argo CD passes both files).
+
+global:
+  environment: dev
+  # ECR registry, e.g. 123456789012.dkr.ecr.eu-west-2.amazonaws.com
+  # GitHub Actions writes the real value into values-stage.yaml / values-prod.yaml.
+  imageRegistry: ""
+  imagePullPolicy: IfNotPresent
+  # Seconds a pod keeps serving after shutdown starts, while the ALB and the
+  # Service stop sending it new requests (no dropped requests during rollouts)
+  preStopSleepSeconds: 5
+
+# Every key below becomes a Deployment + Service with that name.
+# Services call each other by these names, e.g. http://cart:8080
+#
+#   database: { name, user }  -> DB_HOST/DB_NAME/DB_USER/DB_PASSWORD for that
+#                                database on the PostgreSQL cluster below
+#   valkey: true              -> VALKEY_ADDR/VALKEY_PASSWORD
+#   metricsPath               -> scraped by Prometheus (ServiceMonitor)
+services:
+  frontend:
+    image: kubemart/frontend
+    tag: latest
+    port: 8080
+    replicas: 2
+    metricsPath: /metrics
+    probes:
+      readinessPath: /health
+      livenessPath: /health
+    env:
+      # Secret created by Terraform; the app falls back to a dev key without it
+      SECRET_KEY:
+        secretKeyRef:
+          name: frontend-secret
+          key: secret-key
+          optional: true
+    resources:
+      requests: { cpu: 50m, memory: 128Mi }
+      limits: { memory: 256Mi }
+    autoscaling: { enabled: false, minReplicas: 2, maxReplicas: 6, targetCPU: 70 }
+
+  product-catalog:
+    image: kubemart/product-catalog
+    tag: latest
+    port: 8080
+    replicas: 2
+    metricsPath: /metrics
+    database: { name: catalog, user: catalog }
+    valkey: true          # caches the product list
+    env:
+      CACHE_TTL: 60s
+    probes:
+      readinessPath: /health
+      livenessPath: /health
+    resources:
+      requests: { cpu: 25m, memory: 48Mi }
+      limits: { memory: 128Mi }
+    autoscaling: { enabled: false, minReplicas: 2, maxReplicas: 5, targetCPU: 70 }
+
+  cart:
+    image: kubemart/cart
+    tag: latest
+    port: 8080
+    # Carts live in Valkey, so any number of replicas share them
+    replicas: 2
+    metricsPath: /metrics
+    valkey: true
+    env:
+      CART_TTL_DAYS: "30"
+    probes:
+      readinessPath: /health
+      livenessPath: /health
+    resources:
+      requests: { cpu: 25m, memory: 32Mi }
+      limits: { memory: 64Mi }
+    autoscaling: { enabled: false, minReplicas: 2, maxReplicas: 5, targetCPU: 70 }
+
+  orders:
+    image: kubemart/orders
+    tag: latest
+    port: 8080
+    # Orders live in PostgreSQL, so the service can run several replicas
+    replicas: 2
+    metricsPath: /actuator/prometheus
+    database: { name: orders, user: orders }
+    probes:
+      readinessPath: /actuator/health/readiness
+      livenessPath: /actuator/health/liveness
+      startupFailureThreshold: 36   # the JVM needs up to 3 minutes on small nodes
+    resources:
+      requests: { cpu: 250m, memory: 384Mi }
+      limits: { memory: 768Mi }
+    autoscaling: { enabled: false, minReplicas: 2, maxReplicas: 4, targetCPU: 70 }
+
+  payment:
+    image: kubemart/payment
+    tag: latest
+    port: 8080
+    replicas: 2
+    metricsPath: /metrics
+    database: { name: payments, user: payment }
+    probes:
+      readinessPath: /health
+      livenessPath: /health
+    env:
+      PAYMENT_LIMIT_CENTS: "50000"
+    resources:
+      requests: { cpu: 50m, memory: 128Mi }
+      limits: { memory: 256Mi }
+    autoscaling: { enabled: false, minReplicas: 2, maxReplicas: 5, targetCPU: 70 }
+
+# ---------------------------------------------------------------------------
+# PostgreSQL, self-managed in the cluster by the Zalando postgres-operator
+# (installed by Terraform). ONE cluster per environment with one database per
+# service; each service gets its own user that owns only its database.
+# ---------------------------------------------------------------------------
+postgres:
+  # -- Also the name of the Service the apps connect to (always the primary)
+  clusterName: kubemart-db
+  # -- 1 primary + 2 replicas, each in its own Availability Zone, automatic failover
+  instances: 3
+  version: "17"
+  # -- true = a write is confirmed only once a replica has it too (no data loss on failover)
+  synchronousMode: true
+  # -- database -> owner user. The operator creates the users and a password Secret for each.
+  databases:
+    catalog: catalog
+    orders: orders
+    payments: payment
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { cpu: "1", memory: 512Mi }
+  persistence:
+    storageClass: gp3
+    size: 10Gi
+  # -- Client tools for backups (pg_dump); keep it >= the server version
+  clientImage:
+    repository: postgres
+    tag: "17-alpine"
+
+# ---------------------------------------------------------------------------
+# Valkey (open-source Redis): shopping carts + the catalog cache.
+# A StatefulSet with its own EBS disk and an append-only file, so carts survive
+# restarts. The password Secret "valkey-secret" is created by Terraform.
+# ---------------------------------------------------------------------------
+valkey:
+  enabled: true
+  image:
+    repository: valkey/valkey
+    tag: "9.2-alpine"
+  passwordSecret: valkey-secret
+  # -- Carts must never be evicted silently: when memory is full writes fail and an alert fires
+  maxMemory: 200mb
+  persistence:
+    storageClass: gp3
+    size: 2Gi
+  resources:
+    requests: { cpu: 50m, memory: 64Mi }
+    limits: { memory: 256Mi }
+
+exporters:
+  postgres:
+    enabled: true
+    image:
+      repository: quay.io/prometheuscommunity/postgres-exporter
+      tag: v0.20.1
+  valkey:
+    enabled: true
+    image:
+      repository: oliver006/redis_exporter
+      tag: v1.93.0
+
+# Nightly pg_dump of every database to S3. Bucket, region and folder come from
+# the ConfigMap "db-backup-config" and the AWS permissions from EKS Pod Identity,
+# both created by Terraform (module app-namespaces).
+backup:
+  enabled: true
+  # -- Cron schedule in UTC (default 02:30 every night)
+  schedule: "30 2 * * *"
+  configMap: db-backup-config
+  awsCliImage:
+    repository: amazon/aws-cli
+    tag: "2.37.10"
+
+# Public entry point: only the frontend is exposed
+ingress:
+  enabled: true
+  className: alb
+  service: frontend
+  host: shop.example.com
+  # One ALB per environment
+  groupName: kubemart
+  certificateArn: ""
+
+podDisruptionBudget:
+  enabled: true
+
+monitoring:
+  serviceMonitors:
+    enabled: true
+    interval: 30s
+  prometheusRule:
+    enabled: true
+    # -- critical in prod (pages someone), warning in stage
+    severity: warning
+  grafanaDashboard:
+    # -- One dashboard covers every environment (it has a namespace selector), so prod ships it
+    enabled: false

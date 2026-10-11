@@ -1,0 +1,139 @@
+{{- /*
+One Deployment per entry in .Values.services.
+Every pod receives the URLs of the other services, the environment name,
+its database and Valkey settings (if it uses them) and per-service env vars.
+*/ -}}
+{{- $root := . -}}
+{{- range $name, $svc := .Values.services }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "kubemart.labels" (dict "root" $root "name" $name) | nindent 4 }}
+spec:
+  {{- if not $svc.autoscaling.enabled }}
+  replicas: {{ $svc.replicas }}
+  {{- end }}
+  revisionHistoryLimit: 5
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0   # never drop below the desired count during a rollout
+  selector:
+    matchLabels:
+      {{- include "kubemart.selectorLabels" (dict "root" $root "name" $name) | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "kubemart.labels" (dict "root" $root "name" $name) | nindent 8 }}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      # Spread replicas over availability zones and nodes
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              {{- include "kubemart.selectorLabels" (dict "root" $root "name" $name) | nindent 14 }}
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: {{ $name }}
+          image: {{ include "kubemart.image" (dict "root" $root "svc" $svc) | quote }}
+          imagePullPolicy: {{ $root.Values.global.imagePullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ $svc.port }}
+          env:
+            - name: PORT
+              value: {{ $svc.port | quote }}
+            - name: ENVIRONMENT
+              value: {{ $root.Values.global.environment | quote }}
+            - name: CATALOG_URL
+              value: "http://product-catalog:8080"
+            - name: CART_URL
+              value: "http://cart:8080"
+            - name: ORDERS_URL
+              value: "http://orders:8080"
+            - name: PAYMENT_URL
+              value: "http://payment:8080"
+            {{- with $svc.database }}
+            # PostgreSQL: the Service named after the cluster always points at the primary
+            - name: DB_HOST
+              value: {{ $root.Values.postgres.clusterName | quote }}
+            - name: DB_NAME
+              value: {{ .name | quote }}
+            - name: DB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kubemart.dbSecret" (dict "root" $root "user" .user) }}
+                  key: username
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kubemart.dbSecret" (dict "root" $root "user" .user) }}
+                  key: password
+            - name: DB_SSLMODE
+              value: require
+            {{- end }}
+            {{- if and $svc.valkey $root.Values.valkey.enabled }}
+            - name: VALKEY_ADDR
+              value: "{{ include "kubemart.valkeyName" $root }}:6379"
+            - name: VALKEY_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $root.Values.valkey.passwordSecret }}
+                  key: password
+            {{- end }}
+            {{- range $key, $value := $svc.env }}
+            - name: {{ $key }}
+              {{- if kindIs "map" $value }}
+              valueFrom:
+                {{- toYaml $value | nindent 16 }}
+              {{- else }}
+              value: {{ $value | quote }}
+              {{- end }}
+            {{- end }}
+          startupProbe:
+            httpGet:
+              path: {{ $svc.probes.livenessPath }}
+              port: http
+            periodSeconds: 5
+            failureThreshold: {{ $svc.probes.startupFailureThreshold | default 12 }}
+          readinessProbe:
+            httpGet:
+              path: {{ $svc.probes.readinessPath }}
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet:
+              path: {{ $svc.probes.livenessPath }}
+              port: http
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 3
+          # Keep serving for a few seconds after shutdown starts, while the ALB and
+          # the Service stop routing to this pod (built-in sleep: no shell needed)
+          lifecycle:
+            preStop:
+              sleep:
+                seconds: {{ $root.Values.global.preStopSleepSeconds }}
+          resources:
+            {{- toYaml $svc.resources | nindent 12 }}
+          securityContext:
+            {{- include "kubemart.containerSecurity" (dict "readOnly" true) | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        # Writable scratch space (the root filesystem is read-only)
+        - name: tmp
+          emptyDir: {}
+{{- end }}

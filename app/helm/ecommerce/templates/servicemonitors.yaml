@@ -1,0 +1,69 @@
+{{- /*
+Tells Prometheus (kube-prometheus-stack, installed by Terraform) what to scrape:
+  - every app service on its metricsPath (Spring Boot uses /actuator/prometheus)
+  - postgres-exporter on every database pod
+  - valkey-exporter
+Prometheus adds the labels namespace, service and pod to every series, so the
+apps do not need to label themselves.
+*/ -}}
+{{- if .Values.monitoring.serviceMonitors.enabled }}
+{{- $root := . -}}
+{{- range $name, $svc := .Values.services }}
+{{- if $svc.metricsPath }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "kubemart.labels" (dict "root" $root "name" $name) | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "kubemart.selectorLabels" (dict "root" $root "name" $name) | nindent 6 }}
+      kubemart/app-service: "true"
+  endpoints:
+    - port: http
+      path: {{ $svc.metricsPath }}
+      interval: {{ $root.Values.monitoring.serviceMonitors.interval }}
+{{- end }}
+{{- end }}
+{{- if .Values.exporters.postgres.enabled }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ .Values.postgres.clusterName }}
+  labels:
+    {{- include "kubemart.labels" (dict "root" . "name" .Values.postgres.clusterName) | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "kubemart.selectorLabels" (dict "root" . "name" .Values.postgres.clusterName) | nindent 6 }}
+      app.kubernetes.io/component: postgres
+  endpoints:
+    - port: metrics
+      interval: {{ .Values.monitoring.serviceMonitors.interval }}
+      # Keep the Patroni role (master/replica) of each pod on its metrics
+      relabelings:
+        - sourceLabels: [__meta_kubernetes_pod_label_spilo_role]
+          targetLabel: role
+{{- end }}
+{{- if and .Values.valkey.enabled .Values.exporters.valkey.enabled }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "kubemart.valkeyName" . }}
+  labels:
+    {{- include "kubemart.labels" (dict "root" . "name" (include "kubemart.valkeyName" .)) | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "kubemart.selectorLabels" (dict "root" . "name" (include "kubemart.valkeyName" .)) | nindent 6 }}
+      app.kubernetes.io/component: valkey
+  endpoints:
+    - port: metrics
+      interval: {{ .Values.monitoring.serviceMonitors.interval }}
+{{- end }}
+{{- end }}

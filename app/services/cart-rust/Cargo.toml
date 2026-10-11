@@ -1,0 +1,22 @@
+[package]
+name = "cart"
+version = "1.1.0"
+edition = "2021"
+description = "KubeMart cart service"
+
+[dependencies]
+axum = "0.8"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal", "sync", "time"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+redis = { version = "1", default-features = false, features = ["tokio-comp", "connection-manager", "script"] }
+prometheus = { version = "0.14", default-features = false }
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"
+
+[profile.release]
+opt-level = 3
+lto = true
+strip = true

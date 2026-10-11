@@ -1,0 +1,164 @@
+{{- if .Values.monitoring.prometheusRule.enabled }}
+{{- $ns := .Release.Namespace -}}
+{{- $sev := .Values.monitoring.prometheusRule.severity -}}
+{{- $pg := .Values.postgres -}}
+# Alerts for this environment only (every expression is limited to this namespace).
+# "{{ $sev }}" alerts page someone in prod; everything else is a warning.
+# Alertmanager (kube-prometheus-stack) receives them; add a Slack/e-mail receiver there.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: kubemart
+  labels:
+    {{- include "kubemart.labels" (dict "root" . "name" "kubemart") | nindent 4 }}
+spec:
+  groups:
+    - name: kubemart-services
+      rules:
+        - alert: KubeMartServiceDown
+          expr: up{namespace="{{ $ns }}", service=~"{{ keys .Values.services | sortAlpha | join "|" }}"} == 0
+          for: 2m
+          labels: { severity: {{ $sev }} }
+          annotations:
+            summary: "{{`{{ $labels.service }}`}} pod {{`{{ $labels.pod }}`}} is not answering Prometheus"
+            description: "Check the pod: kubectl -n {{ $ns }} describe pod {{`{{ $labels.pod }}`}}"
+        - alert: KubeMartNoReadyPods
+          expr: kube_deployment_status_replicas_available{namespace="{{ $ns }}"} == 0
+          for: 2m
+          labels: { severity: {{ $sev }} }
+          annotations:
+            summary: "{{`{{ $labels.deployment }}`}} has no ready pods: that part of the shop is down"
+        - alert: KubeMartHighErrorRate
+          expr: |
+            (
+              sum by (service) (rate(http_requests_total{namespace="{{ $ns }}", status=~"5.."}[5m]))
+              or sum by (service) (rate(http_server_requests_seconds_count{namespace="{{ $ns }}", status=~"5.."}[5m]))
+            )
+            /
+            (
+              sum by (service) (rate(http_requests_total{namespace="{{ $ns }}"}[5m]))
+              or sum by (service) (rate(http_server_requests_seconds_count{namespace="{{ $ns }}"}[5m]))
+            ) > 0.05
+          for: 5m
+          labels: { severity: {{ $sev }} }
+          annotations:
+            summary: "More than 5% of {{`{{ $labels.service }}`}} requests fail ({{`{{ $value | humanizePercentage }}`}})"
+            description: "Search the logs in Kibana: kubernetes.container_name : \"{{`{{ $labels.service }}`}}\" and log_level : \"error\""
+        - alert: KubeMartSlowResponses
+          expr: |
+            histogram_quantile(0.95,
+              sum by (service, le) (
+                rate(http_request_duration_seconds_bucket{namespace="{{ $ns }}"}[5m])
+                or rate(http_server_requests_seconds_bucket{namespace="{{ $ns }}"}[5m])
+              )
+            ) > 1
+          for: 10m
+          labels: { severity: warning }
+          annotations:
+            summary: "95% of {{`{{ $labels.service }}`}} requests take longer than {{`{{ $value | humanizeDuration }}`}}"
+        - alert: KubeMartPodRestarting
+          expr: increase(kube_pod_container_status_restarts_total{namespace="{{ $ns }}"}[15m]) > 3
+          labels: { severity: warning }
+          annotations:
+            summary: "{{`{{ $labels.pod }}`}} restarted {{`{{ $value | printf \"%.0f\" }}`}} times in 15 minutes"
+            description: "kubectl -n {{ $ns }} logs {{`{{ $labels.pod }}`}} --previous"
+
+    - name: kubemart-business
+      rules:
+        - alert: KubeMartCheckoutsFailing
+          expr: sum(rate(kubemart_orders_total{namespace="{{ $ns }}", status=~"DOWNSTREAM_ERROR|DATABASE_ERROR"}[5m])) > 0
+          for: 5m
+          labels: { severity: {{ $sev }} }
+          annotations:
+            summary: "Customers cannot check out: orders fail because a service or the database is unavailable"
+        - alert: KubeMartPaymentDeclinesHigh
+          expr: |
+            sum(rate(payments_total{namespace="{{ $ns }}", status="declined"}[15m]))
+            / sum(rate(payments_total{namespace="{{ $ns }}"}[15m])) > 0.5
+          for: 15m
+          labels: { severity: warning }
+          annotations:
+            summary: "More than half of all payments are declined ({{`{{ $value | humanizePercentage }}`}})"
+        - alert: KubeMartCartStoreErrors
+          expr: sum(rate(cart_store_errors_total{namespace="{{ $ns }}"}[5m])) > 0
+          for: 5m
+          labels: { severity: {{ $sev }} }
+          annotations:
+            summary: "The cart service cannot reach Valkey: shoppers cannot add items"
+
+    - name: kubemart-postgres
+      rules:
+        - alert: PostgresDown
+          expr: pg_up{namespace="{{ $ns }}"} == 0
+          for: 1m
+          labels: { severity: {{ $sev }} }
+          annotations:
+            summary: "PostgreSQL in pod {{`{{ $labels.pod }}`}} is down"
+            description: "kubectl -n {{ $ns }} exec -it {{`{{ $labels.pod }}`}} -c postgres -- patronictl list"
+        - alert: PostgresNoPrimary
+          expr: count(pg_replication_is_replica{namespace="{{ $ns }}"} == 0) < 1 or absent(pg_replication_is_replica{namespace="{{ $ns }}"} == 0)
+          for: 2m
+          labels: { severity: {{ $sev }} }
+          annotations:
+            summary: "No PostgreSQL primary: orders and payments cannot be written"
+        - alert: PostgresReplicasMissing
+          expr: count(pg_up{namespace="{{ $ns }}"} == 1) < {{ $pg.instances }}
+          for: 10m
+          labels: { severity: warning }
+          annotations:
+            summary: "Only {{`{{ $value }}`}} of {{ $pg.instances }} PostgreSQL members are up: one more failure could stop the shop"
+        - alert: PostgresReplicationLag
+          expr: max by (pod) (pg_replication_lag_seconds{namespace="{{ $ns }}"}) > 30
+          for: 5m
+          labels: { severity: warning }
+          annotations:
+            summary: "Replica {{`{{ $labels.pod }}`}} is {{`{{ $value | humanizeDuration }}`}} behind the primary"
+        - alert: PostgresConnectionsHigh
+          expr: |
+            sum by (pod) (pg_stat_activity_count{namespace="{{ $ns }}"})
+            / max by (pod) (pg_settings_max_connections{namespace="{{ $ns }}"}) > 0.8
+          for: 5m
+          labels: { severity: warning }
+          annotations:
+            summary: "{{`{{ $labels.pod }}`}} uses more than 80% of its connections"
+
+    - name: kubemart-valkey
+      rules:
+        - alert: ValkeyDown
+          expr: redis_up{namespace="{{ $ns }}"} == 0 or absent(redis_up{namespace="{{ $ns }}"})
+          for: 2m
+          labels: { severity: {{ $sev }} }
+          annotations:
+            summary: "Valkey is down: carts are unavailable and the catalog reads straight from PostgreSQL"
+        - alert: ValkeyMemoryHigh
+          expr: redis_memory_used_bytes{namespace="{{ $ns }}"} / (redis_memory_max_bytes{namespace="{{ $ns }}"} > 0) > 0.8
+          for: 5m
+          labels: { severity: warning }
+          annotations:
+            summary: "Valkey uses {{`{{ $value | humanizePercentage }}`}} of its memory; at 100% new cart items are refused"
+            description: "Raise valkey.maxMemory (and the container memory limit) in the Helm values"
+
+    - name: kubemart-storage-and-backups
+      rules:
+        - alert: KubeMartVolumeAlmostFull
+          expr: |
+            kubelet_volume_stats_used_bytes{namespace="{{ $ns }}"}
+            / kubelet_volume_stats_capacity_bytes{namespace="{{ $ns }}"} > 0.8
+          for: 10m
+          labels: { severity: warning }
+          annotations:
+            summary: "Disk {{`{{ $labels.persistentvolumeclaim }}`}} is {{`{{ $value | humanizePercentage }}`}} full"
+        {{- if .Values.backup.enabled }}
+        - alert: KubeMartBackupFailed
+          expr: kube_job_status_failed{namespace="{{ $ns }}", job_name=~"kubemart-db-backup-.*"} > 0
+          labels: { severity: warning }
+          annotations:
+            summary: "Database backup job {{`{{ $labels.job_name }}`}} failed"
+            description: "kubectl -n {{ $ns }} logs job/{{`{{ $labels.job_name }}`}} --all-containers"
+        - alert: KubeMartBackupTooOld
+          expr: time() - kube_cronjob_status_last_successful_time{namespace="{{ $ns }}", cronjob="kubemart-db-backup"} > 26 * 3600
+          labels: { severity: {{ $sev }} }
+          annotations:
+            summary: "No successful database backup for more than 26 hours"
+        {{- end }}
+{{- end }}

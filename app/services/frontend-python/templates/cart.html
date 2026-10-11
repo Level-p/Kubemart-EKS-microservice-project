@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}Cart - KubeMart{% endblock %}
+{% block content %}
+<h1>Your cart</h1>
+{% if lines %}
+<table class="table">
+  <thead><tr><th>Product</th><th>Qty</th><th>Price</th><th></th></tr></thead>
+  <tbody>
+    {% for line in lines %}
+    <tr>
+      <td>{{ line.product.name }}</td>
+      <td>{{ line.quantity }}</td>
+      <td>{{ line.line_total|money(line.product.currency) }}</td>
+      <td>
+        <form method="post" action="{{ url_for('remove_from_cart') }}">
+          <input type="hidden" name="product_id" value="{{ line.product.id }}">
+          <button class="link" type="submit">Remove</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+  <tfoot><tr><th colspan="2">Total</th><th>{{ total|money }}</th><th></th></tr></tfoot>
+</table>
+<form method="post" action="{{ url_for('checkout') }}">
+  <button type="submit" class="primary">Checkout</button>
+</form>
+{% else %}
+<p>Your cart is empty. <a href="{{ url_for('index') }}">Keep shopping</a>.</p>
+{% endif %}
+{% endblock %}

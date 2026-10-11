@@ -1,0 +1,70 @@
+# ---------------------------------------------------------------------------
+# KubeMart: promote what runs in stage to production (GitOps)
+#
+# Run it by hand (Actions > KubeMart Promote to Production > Run workflow).
+#   1. waits for approval: the "production" environment has required reviewers
+#   2. copies the image registry and every service tag from values-stage.yaml
+#      into values-prod.yaml, commits and pushes
+#   3. Argo CD then shows kubemart-prod as OutOfSync: a person reviews the
+#      diff and clicks SYNC (second key)
+#
+# Roll back: revert the promotion commit (git revert <sha>), push, Sync.
+# ---------------------------------------------------------------------------
+name: KubeMart Promote to Production
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write   # push the values-prod.yaml commit
+
+concurrency:
+  group: kubemart-gitops-refs/heads/main   # same group as the app workflow
+  cancel-in-progress: false
+
+env:
+  CHART: app/helm/ecommerce
+
+jobs:
+  promote:
+    name: Copy stage tags to prod
+    runs-on: ubuntu-latest
+    environment:
+      name: production   # add "Required reviewers" in Settings > Environments
+      url: https://shop.${{ vars.DOMAIN_NAME || 'mfon21.space' }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+
+      - name: Copy registry and tags
+        run: |
+          STAGE="$CHART/values-stage.yaml"
+          PROD="$CHART/values-prod.yaml"
+          REGISTRY=$(yq '.global.imageRegistry' "$STAGE") yq -i '.global.imageRegistry = strenv(REGISTRY)' "$PROD"
+          for name in $(yq -r '.services | keys | .[]' "$STAGE"); do
+            TAG=$(NAME="$name" yq '.services[strenv(NAME)].tag' "$STAGE")
+            NAME="$name" TAG="$TAG" yq -i '.services[strenv(NAME)].tag = strenv(TAG)' "$PROD"
+          done
+          {
+            echo "### Changes for production"
+            echo '```diff'
+            git diff -- "$PROD"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "$CHART/values-prod.yaml"
+          if git diff --cached --quiet; then
+            echo "Production already runs the stage versions." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          git commit -m "ci: promote stage images to prod (run $GITHUB_RUN_NUMBER) [skip ci]"
+          for attempt in 1 2 3 4 5; do
+            git pull --rebase origin main && git push origin HEAD:main && break
+            sleep $((attempt * 5))
+          done
+          echo "Prod values updated. Open Argo CD, review **kubemart-prod** (APP DIFF) and click **SYNC**." >> "$GITHUB_STEP_SUMMARY"

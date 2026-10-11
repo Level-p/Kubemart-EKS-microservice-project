@@ -1,0 +1,8 @@
+apiVersion: v2
+name: elastic-stack
+description: >-
+  Elasticsearch (StatefulSet managed by ECK) and Kibana for KubeMart logs.
+  Installed by Terraform after the ECK operator so the CRDs already exist.
+type: application
+version: 1.0.0
+appVersion: "9.4.8"

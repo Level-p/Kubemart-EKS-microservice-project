@@ -1,0 +1,24 @@
+KubeMart ({{ .Values.global.environment }}) deployed to namespace {{ .Release.Namespace }}.
+
+  kubectl get deploy,pods,svc,ingress,hpa -n {{ .Release.Namespace }}
+{{- if .Values.ingress.enabled }}
+
+Shop URL (DNS created by ExternalDNS, allow a few minutes):
+  https://{{ .Values.ingress.host }}
+{{- end }}
+
+PostgreSQL ({{ .Values.postgres.instances }} members, run by the postgres-operator):
+  kubectl get postgresql,pods -n {{ .Release.Namespace }} -l cluster-name={{ .Values.postgres.clusterName }} -L spilo-role
+  kubectl exec -it {{ .Values.postgres.clusterName }}-0 -n {{ .Release.Namespace }} -c postgres -- patronictl list
+{{- if .Values.valkey.enabled }}
+
+Valkey (carts and catalog cache):
+  kubectl get statefulset,pvc -n {{ .Release.Namespace }} -l app.kubernetes.io/component=valkey
+{{- end }}
+{{- if .Values.backup.enabled }}
+
+Run a database backup now:
+  kubectl create job --from=cronjob/kubemart-db-backup manual-backup -n {{ .Release.Namespace }}
+{{- end }}
+
+Metrics: Grafana dashboard "KubeMart overview". Logs: Kibana, search kubernetes.container_name : "orders".

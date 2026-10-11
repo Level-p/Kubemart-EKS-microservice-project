@@ -1,0 +1,36 @@
+# Stage: fully automated. Every commit GitHub Actions makes to values-stage.yaml is
+# deployed within ~3 minutes (Argo CD polls Git), and manual kubectl changes
+# are reverted (selfHeal).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: kubemart-stage
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io   # deleting the app deletes its resources
+spec:
+  project: kubemart
+  source:
+    repoURL: https://github.com/your-github-user/kubemart.git
+    targetRevision: main
+    path: app/helm/ecommerce
+    helm:
+      releaseName: kubemart
+      valueFiles:
+        - values.yaml
+        - values-stage.yaml
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: kubemart-stage
+  syncPolicy:
+    automated:
+      prune: true      # delete resources removed from Git
+      selfHeal: true   # undo manual changes in the cluster
+    syncOptions:
+      - CreateNamespace=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 10s
+        factor: 2
+        maxDuration: 3m

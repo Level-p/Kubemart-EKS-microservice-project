@@ -1,0 +1,238 @@
+# ---------------------------------------------------------------------------
+# KubeMart application CI + GitOps (folder: app/)
+#
+#   changes       -> which services/<name> folders changed in this push or PR
+#   chart         -> helm lint + render for stage and prod (when the chart changed)
+#   build         -> ONLY the changed services, in parallel: docker build (unit
+#                    tests run inside it), Trivy scan, push to ECR
+#   update-stage  -> writes the new image tags into app/helm/ecommerce/values-stage.yaml
+#                    and pushes; Argo CD (in the cluster) deploys stage within ~3 min
+#
+# Pull requests build and test the changed services but push nothing.
+# A manual run ("Run workflow") rebuilds all five services.
+# Production: run the "KubeMart Promote to Production" workflow.
+#
+# The workflow never runs kubectl or helm against the cluster: Git is the only
+# way changes reach Kubernetes (Argo CD pulls them).
+#
+# Required repository secret: AWS_ROLE_ARN (bootstrap output github_actions_role_arn)
+# Settings > Actions > General > Workflow permissions: "Read and write" is NOT
+# needed; the update-stage job asks for contents: write itself.
+# ---------------------------------------------------------------------------
+name: KubeMart Application
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "app/services/**"
+      - "app/helm/**"
+      - ".github/workflows/kubemart-app.yml"
+  pull_request:
+    paths:
+      - "app/services/**"
+      - "app/helm/**"
+      - ".github/workflows/kubemart-app.yml"
+  workflow_dispatch:
+
+permissions:
+  id-token: write   # GitHub OIDC -> AWS
+  contents: read
+
+# One run at a time on main, shared with the promote workflow, so two runs never
+# write the values files at the same moment
+concurrency:
+  group: kubemart-gitops-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: eu-west-2
+  ECR_PREFIX: kubemart
+  CHART: app/helm/ecommerce
+  HELM_VERSION: v3.22.0
+
+jobs:
+  changes:
+    name: Detect changed services
+    runs-on: ubuntu-latest
+    outputs:
+      services: ${{ steps.pick.outputs.services }}
+      chart: ${{ steps.filter.outputs.chart }}
+    steps:
+      - uses: actions/checkout@v7
+
+      # Compares with the previous commit of the push (or the PR's base branch)
+      - uses: dorny/paths-filter@v4
+        id: filter
+        with:
+          filters: |
+            frontend: app/services/frontend-python/**
+            product-catalog: app/services/product-catalog-go/**
+            cart: app/services/cart-rust/**
+            orders: app/services/orders-java/**
+            payment: app/services/payment-python/**
+            chart: app/helm/**
+
+      # Service name (= Kubernetes Deployment and ECR repository kubemart/<name>) + folder
+      - name: Services to build
+        id: pick
+        env:
+          CHANGED: ${{ steps.filter.outputs.changes }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          ALL='[
+            {"name":"frontend","dir":"app/services/frontend-python"},
+            {"name":"product-catalog","dir":"app/services/product-catalog-go"},
+            {"name":"cart","dir":"app/services/cart-rust"},
+            {"name":"orders","dir":"app/services/orders-java"},
+            {"name":"payment","dir":"app/services/payment-python"}
+          ]'
+          if [ "$EVENT" = "workflow_dispatch" ]; then
+            echo "Manual run: building all five services."
+            SELECTED="$ALL"
+          else
+            SELECTED=$(jq -c --argjson changed "$CHANGED" '[.[] | select(.name as $n | $changed | index($n))]' <<< "$ALL")
+          fi
+          echo "services=$(jq -c . <<< "$SELECTED")" >> "$GITHUB_OUTPUT"
+          echo "### Services to build" >> "$GITHUB_STEP_SUMMARY"
+          jq -r 'if length == 0 then "none (no service folder changed)" else .[] | "- " + .name end' <<< "$SELECTED" >> "$GITHUB_STEP_SUMMARY"
+
+  chart:
+    name: Helm lint and render
+    needs: changes
+    if: needs.changes.outputs.chart == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: azure/setup-helm@v5
+        with:
+          version: ${{ env.HELM_VERSION }}
+      - name: Lint and render stage and prod
+        run: |
+          for env in stage prod; do
+            echo "::group::$env"
+            helm lint "$CHART" -f "$CHART/values-$env.yaml"
+            helm template kubemart "$CHART" -n "kubemart-$env" -f "$CHART/values-$env.yaml" > /dev/null
+            echo "::endgroup::"
+          done
+
+  build:
+    name: Build ${{ matrix.service.name }}
+    needs: changes
+    if: needs.changes.outputs.services != '[]'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false        # one broken service does not cancel the others
+      matrix:
+        service: ${{ fromJSON(needs.changes.outputs.services) }}
+    outputs:
+      registry: ${{ steps.ecr.outputs.registry }}
+    env:
+      PUSH: ${{ github.event_name != 'pull_request' }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Configure AWS credentials (OIDC)
+        if: env.PUSH == 'true'
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Log in to Amazon ECR
+        if: env.PUSH == 'true'
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Image name
+        id: meta
+        run: |
+          # <run number>-<short commit>: readable, unique, and traceable to the code
+          TAG="${GITHUB_RUN_NUMBER}-${GITHUB_SHA::7}"
+          REGISTRY="${{ steps.ecr.outputs.registry || 'local' }}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "image=$REGISTRY/$ECR_PREFIX/${{ matrix.service.name }}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v4
+
+      # The unit tests run inside every Dockerfile, so a failing test stops the build
+      - name: Build and test (docker build)
+        uses: docker/build-push-action@v7
+        with:
+          context: ${{ matrix.service.dir }}
+          load: true
+          tags: ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.tag }}
+          # Per-service layer cache, so Maven and Cargo downloads are reused between runs
+          cache-from: type=gha,scope=${{ matrix.service.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service.name }}
+
+      - name: Trivy scan (report HIGH)
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.tag }}
+          severity: HIGH
+          ignore-unfixed: true
+          exit-code: "0"
+          format: table
+
+      - name: Trivy scan (block CRITICAL)
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.tag }}
+          severity: CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"     # a fixable critical vulnerability never reaches the cluster
+          format: table
+          skip-setup-trivy: true
+
+      - name: Push to ECR
+        if: env.PUSH == 'true'
+        run: docker push "${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.tag }}"
+
+  update-stage:
+    name: Deploy to stage (GitOps commit)
+    needs: [changes, build]
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # push the values-stage.yaml commit
+    environment:
+      name: stage
+      url: https://shop-stage.${{ vars.DOMAIN_NAME || 'mfon21.space' }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+
+      - name: Write the new tags into values-stage.yaml
+        env:
+          SERVICES: ${{ needs.changes.outputs.services }}
+          REGISTRY: ${{ needs.build.outputs.registry }}
+        run: |
+          TAG="${GITHUB_RUN_NUMBER}-${GITHUB_SHA::7}"
+          FILE="$CHART/values-stage.yaml"
+          yq -i '.global.imageRegistry = strenv(REGISTRY)' "$FILE"
+          # Only the rebuilt services get a new tag; the others are not restarted
+          for name in $(jq -r '.[].name' <<< "$SERVICES"); do
+            NAME="$name" TAG="$TAG" yq -i '.services[strenv(NAME)].tag = strenv(TAG)' "$FILE"
+          done
+          git diff -- "$FILE"
+          echo "TAG=$TAG" >> "$GITHUB_ENV"
+          echo "NAMES=$(jq -r '[.[].name] | join(",")' <<< "$SERVICES")" >> "$GITHUB_ENV"
+
+      # Commits made with the built-in GITHUB_TOKEN never start another workflow run
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "$CHART/values-stage.yaml"
+          if git diff --cached --quiet; then echo "Nothing to commit"; exit 0; fi
+          git commit -m "ci: deploy $NAMES $TAG to stage [skip ci]"
+          for attempt in 1 2 3 4 5; do
+            git pull --rebase origin main && git push origin HEAD:main && break
+            echo "Push rejected (someone pushed meanwhile), retrying..."; sleep $((attempt * 5))
+          done
+          {
+            echo "### Stage updated"
+            echo "Services: **$NAMES**, tag \`$TAG\`. Argo CD syncs kubemart-stage within about 3 minutes."
+          } >> "$GITHUB_STEP_SUMMARY"

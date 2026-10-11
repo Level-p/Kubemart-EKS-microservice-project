@@ -1,0 +1,112 @@
+{{- if .Values.backup.enabled }}
+{{- $pg := .Values.postgres -}}
+{{- $super := include "kubemart.dbSecret" (dict "root" . "user" "postgres") -}}
+# The backup job's AWS permissions come from EKS Pod Identity: Terraform links
+# this ServiceAccount (in this namespace) to an IAM role that may only write to
+# this environment's folder of the backup bucket. No AWS keys in the cluster.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kubemart-db-backup
+  labels:
+    {{- include "kubemart.labels" (dict "root" . "name" "kubemart-db-backup") | nindent 4 }}
+---
+# Nightly logical backup of every database, read from a replica so the primary
+# (and the shop) is not slowed down:
+#   1. init container "dump":  pg_dump each database -> /backup/<db>-<time>.dump
+#   2. container "upload":     aws s3 cp -> s3://<bucket>/<environment>/<date>/
+# Bucket, region and folder come from the ConfigMap Terraform creates. Old backups
+# are deleted by an S3 lifecycle rule, not by this job.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: kubemart-db-backup
+  labels:
+    {{- include "kubemart.labels" (dict "root" . "name" "kubemart-db-backup") | nindent 4 }}
+    app.kubernetes.io/component: backup
+spec:
+  schedule: {{ .Values.backup.schedule | quote }}
+  timeZone: Etc/UTC
+  concurrencyPolicy: Forbid       # never two backups at once
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 3600
+      template:
+        metadata:
+          labels:
+            {{- include "kubemart.selectorLabels" (dict "root" . "name" "kubemart-db-backup") | nindent 12 }}
+        spec:
+          serviceAccountName: kubemart-db-backup
+          restartPolicy: Never
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 70     # "postgres" user in the alpine image
+            runAsGroup: 70
+            fsGroup: 70
+            seccompProfile:
+              type: RuntimeDefault
+          initContainers:
+            - name: dump
+              image: "{{ $pg.clientImage.repository }}:{{ $pg.clientImage.tag }}"
+              env:
+                - name: PGUSER
+                  valueFrom:
+                    secretKeyRef: { name: {{ $super }}, key: username }
+                - name: PGPASSWORD
+                  valueFrom:
+                    secretKeyRef: { name: {{ $super }}, key: password }
+                - name: PGSSLMODE
+                  value: require
+                - name: PGHOST
+                  value: {{ printf "%s-repl" $pg.clusterName | quote }}
+              command: ["sh", "-c"]
+              # "$$(" stops Kubernetes from treating $(date ...) as one of its own variables
+              args:
+                - >-
+                  set -e;
+                  STAMP=$$(date -u +%Y%m%d-%H%M%S);
+                  for DB in {{ keys $pg.databases | sortAlpha | join " " }}; do
+                  pg_dump -d "$DB" -Fc -f "/backup/$DB-$STAMP.dump";
+                  done;
+                  ls -lh /backup
+              resources:
+                requests: { cpu: 50m, memory: 64Mi }
+                limits: { memory: 256Mi }
+              securityContext:
+                {{- include "kubemart.containerSecurity" (dict "readOnly" true) | nindent 16 }}
+              volumeMounts:
+                - name: backup
+                  mountPath: /backup
+          containers:
+            - name: upload
+              image: "{{ .Values.backup.awsCliImage.repository }}:{{ .Values.backup.awsCliImage.tag }}"
+              envFrom:
+                # BACKUP_BUCKET, BACKUP_PREFIX, AWS_REGION
+                - configMapRef:
+                    name: {{ .Values.backup.configMap }}
+              env:
+                - name: HOME
+                  value: /tmp
+              command: ["sh", "-c"]
+              args:
+                - >-
+                  set -e;
+                  DAY=$$(date -u +%Y-%m-%d);
+                  aws s3 cp /backup/ "s3://$BACKUP_BUCKET/$BACKUP_PREFIX/$DAY/" --recursive --only-show-errors;
+                  echo "Uploaded to s3://$BACKUP_BUCKET/$BACKUP_PREFIX/$DAY/:"; ls /backup
+              resources:
+                requests: { cpu: 50m, memory: 64Mi }
+                limits: { memory: 256Mi }
+              securityContext:
+                {{- include "kubemart.containerSecurity" (dict "readOnly" false) | nindent 16 }}
+              volumeMounts:
+                - name: backup
+                  mountPath: /backup
+          volumes:
+            - name: backup
+              emptyDir:
+                sizeLimit: 10Gi
+{{- end }}

@@ -1,0 +1,30 @@
+# Terraform (terraform/ also has its own .gitignore)
+.terraform/
+.docs/
+*.tfstate
+*.tfstate.*
+*.tfvars
+*.tfplan
+tfplan
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+
+# Go / Rust / Java build output
+/app/services/product-catalog-go/product-catalog
+/app/services/cart-rust/target/
+/app/services/orders-java/target/
+
+
+# Helm packages
+*.tgz
+
+# Editors, OS and Office lock files
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+~$*.docx

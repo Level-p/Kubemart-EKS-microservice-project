@@ -1,0 +1,33 @@
+# Prod: manual sync. When the "KubeMart Promote to Production" workflow writes new tags into values-prod.yaml,
+# Argo CD marks the app OutOfSync and shows the diff; a person reviews it and
+# clicks SYNC (or runs: argocd app sync kubemart-prod).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: kubemart-prod
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: kubemart
+  source:
+    repoURL: https://github.com/your-github-user/kubemart.git
+    targetRevision: main
+    path: app/helm/ecommerce
+    helm:
+      releaseName: kubemart
+      valueFiles:
+        - values.yaml
+        - values-prod.yaml
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: kubemart-prod
+  syncPolicy:
+    syncOptions:
+      - CreateNamespace=true
+  # HPAs own the replica count in prod, so ignore it when comparing with Git
+  ignoreDifferences:
+    - group: apps
+      kind: Deployment
+      jsonPointers:
+        - /spec/replicas

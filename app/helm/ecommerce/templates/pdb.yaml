@@ -1,0 +1,20 @@
+{{- /* PodDisruptionBudgets for services that run more than one pod */ -}}
+{{- $root := . -}}
+{{- if .Values.podDisruptionBudget.enabled }}
+{{- range $name, $svc := .Values.services }}
+{{- if or (gt (int $svc.replicas) 1) $svc.autoscaling.enabled }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "kubemart.labels" (dict "root" $root "name" $name) | nindent 4 }}
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      {{- include "kubemart.selectorLabels" (dict "root" $root "name" $name) | nindent 6 }}
+{{- end }}
+{{- end }}
+{{- end }}

@@ -1,0 +1,15 @@
+{{- if .Values.monitoring.grafanaDashboard.enabled }}
+# Grafana's sidecar (kube-prometheus-stack) loads every ConfigMap labelled
+# grafana_dashboard=1, in any namespace. The dashboard has an Environment
+# selector, so only one environment (prod) needs to ship it.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kubemart-grafana-dashboard
+  labels:
+    {{- include "kubemart.labels" (dict "root" . "name" "kubemart-grafana-dashboard") | nindent 4 }}
+    grafana_dashboard: "1"
+data:
+  kubemart-overview.json: |-
+    {{- .Files.Get "dashboards/kubemart-overview.json" | nindent 4 }}
+{{- end }}

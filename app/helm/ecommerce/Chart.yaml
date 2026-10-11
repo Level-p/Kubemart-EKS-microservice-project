@@ -1,0 +1,15 @@
+apiVersion: v2
+name: kubemart
+description: >-
+  KubeMart e-commerce microservices (Python, Go, Rust, Java) for Amazon EKS.
+  Includes a self-managed 3-member PostgreSQL cluster (postgres-operator), Valkey,
+  nightly backups to S3, ServiceMonitors, alerts and a Grafana dashboard.
+  Deployed by Argo CD (GitOps); GitHub Actions updates the image tags in values-*.yaml.
+type: application
+version: 1.1.0
+appVersion: "1.1.0"
+keywords:
+  - ecommerce
+  - microservices
+  - argocd
+  - eks

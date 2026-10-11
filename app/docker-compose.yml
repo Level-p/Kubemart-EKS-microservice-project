@@ -1,0 +1,99 @@
+# Run the whole shop locally, with the same data stores as in Kubernetes:
+#   docker compose up --build
+#   Storefront: http://localhost:8080
+# Each service is also published on its own port for testing with curl.
+# (Locally there is ONE PostgreSQL without TLS; in EKS it is a 3-member cluster with TLS.)
+x-db: &db
+  DB_HOST: postgres
+  DB_USER: kubemart
+  DB_PASSWORD: kubemart-local
+  DB_SSLMODE: disable
+
+x-valkey: &valkey
+  VALKEY_ADDR: valkey:6379
+  VALKEY_PASSWORD: valkey-local
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: kubemart
+      POSTGRES_PASSWORD: kubemart-local
+      POSTGRES_DB: catalog
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      # creates the "orders" and "payments" databases on first start
+      - ./local/init-databases.sql:/docker-entrypoint-initdb.d/init-databases.sql:ro
+    ports: ["5432:5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kubemart -d catalog"]
+      interval: 3s
+      retries: 20
+
+  valkey:
+    image: valkey/valkey:9.2-alpine
+    command: ["--requirepass", "valkey-local", "--appendonly", "yes"]
+    volumes:
+      - valkeydata:/data
+    ports: ["6379:6379"]
+    healthcheck:
+      test: ["CMD", "valkey-cli", "-a", "valkey-local", "--no-auth-warning", "ping"]
+      interval: 3s
+      retries: 20
+
+  frontend:
+    build: ./services/frontend-python
+    ports: ["8080:8080"]
+    environment:
+      ENVIRONMENT: local
+      CATALOG_URL: http://product-catalog:8080
+      CART_URL: http://cart:8080
+      ORDERS_URL: http://orders:8080
+    depends_on: [product-catalog, cart, orders]
+
+  product-catalog:
+    build: ./services/product-catalog-go
+    ports: ["8081:8080"]
+    environment:
+      <<: [*db, *valkey]
+      DB_NAME: catalog
+    depends_on:
+      postgres: { condition: service_healthy }
+      valkey: { condition: service_healthy }
+
+  cart:
+    build: ./services/cart-rust
+    ports: ["8082:8080"]
+    environment:
+      <<: *valkey
+    depends_on:
+      valkey: { condition: service_healthy }
+
+  orders:
+    build: ./services/orders-java
+    ports: ["8083:8080"]
+    environment:
+      <<: *db
+      DB_NAME: orders
+      CATALOG_URL: http://product-catalog:8080
+      CART_URL: http://cart:8080
+      PAYMENT_URL: http://payment:8080
+    depends_on:
+      postgres: { condition: service_healthy }
+      product-catalog: { condition: service_started }
+      cart: { condition: service_started }
+      payment: { condition: service_started }
+
+  payment:
+    build: ./services/payment-python
+    ports: ["8084:8080"]
+    environment:
+      <<: *db
+      DB_NAME: payments
+      PAYMENT_LIMIT_CENTS: "50000"
+    depends_on:
+      postgres: { condition: service_healthy }
+
+volumes:
+  pgdata:
+  valkeydata:

@@ -1,0 +1,124 @@
+{{- if .Values.valkey.enabled }}
+{{- $name := include "kubemart.valkeyName" . -}}
+{{- $v := .Values.valkey -}}
+# Valkey (the open-source Redis fork) holds shopping carts and the catalog cache.
+# Carts must survive restarts, so Valkey runs as a StatefulSet with its own EBS
+# disk and writes every change to an append-only file (fsync every second).
+# The password Secret is created by Terraform, never stored in Git.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "kubemart.labels" (dict "root" . "name" $name) | nindent 4 }}
+    app.kubernetes.io/component: valkey
+  annotations:
+    argocd.argoproj.io/sync-options: Prune=false,Delete=false
+spec:
+  serviceName: {{ $name }}
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "kubemart.selectorLabels" (dict "root" . "name" $name) | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "kubemart.labels" (dict "root" . "name" $name) | nindent 8 }}
+        app.kubernetes.io/component: valkey
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999   # "valkey" user in the official image
+        runAsGroup: 999
+        fsGroup: 999
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: valkey
+          image: "{{ $v.image.repository }}:{{ $v.image.tag }}"
+          env:
+            - name: VALKEY_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: {{ $v.passwordSecret }}, key: password }
+          args:
+            - --requirepass
+            - $(VALKEY_PASSWORD)
+            - --appendonly
+            - "yes"
+            - --appendfsync
+            - everysec
+            - --maxmemory
+            - {{ $v.maxMemory | quote }}
+            # Never evict carts silently: when memory is full writes fail and ValkeyMemoryHigh fires first
+            - --maxmemory-policy
+            - noeviction
+          ports:
+            - name: valkey
+              containerPort: 6379
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "valkey-cli -a \"$VALKEY_PASSWORD\" --no-auth-warning ping | grep -q PONG"]
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: valkey
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          resources:
+            {{- toYaml $v.resources | nindent 12 }}
+          securityContext:
+            {{- include "kubemart.containerSecurity" (dict "readOnly" true) | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+        {{- if .Values.exporters.valkey.enabled }}
+        - name: valkey-exporter
+          image: "{{ .Values.exporters.valkey.image.repository }}:{{ .Values.exporters.valkey.image.tag }}"
+          env:
+            - name: REDIS_ADDR
+              value: redis://127.0.0.1:6379
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: {{ $v.passwordSecret }}, key: password }
+          ports:
+            - name: metrics
+              containerPort: 9121
+          resources:
+            requests: { cpu: 10m, memory: 16Mi }
+            limits: { memory: 64Mi }
+          securityContext:
+            {{- include "kubemart.containerSecurity" (dict "readOnly" true) | nindent 12 }}
+        {{- end }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: {{ $v.persistence.storageClass }}
+        resources:
+          requests:
+            storage: {{ $v.persistence.size }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "kubemart.labels" (dict "root" . "name" $name) | nindent 4 }}
+    app.kubernetes.io/component: valkey
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "kubemart.selectorLabels" (dict "root" . "name" $name) | nindent 4 }}
+  ports:
+    - name: valkey
+      port: 6379
+      targetPort: valkey
+    {{- if .Values.exporters.valkey.enabled }}
+    - name: metrics
+      port: 9121
+      targetPort: metrics
+    {{- end }}
+{{- end }}

@@ -1,0 +1,45 @@
+# Production environment (namespace kubemart-prod)
+# Tags are copied here from values-stage.yaml by the "KubeMart Promote to Production" workflow.
+# Argo CD shows prod as OutOfSync; a person clicks Sync (manual approval).
+global:
+  environment: prod
+  imageRegistry: "<AWS_ACCOUNT_ID>.dkr.ecr.eu-west-2.amazonaws.com"
+
+ingress:
+  host: shop.mfon21.space
+  groupName: kubemart-prod
+
+services:
+  frontend:
+    tag: latest
+    autoscaling: { enabled: true, minReplicas: 2, maxReplicas: 6, targetCPU: 70 }
+  product-catalog:
+    tag: latest
+    autoscaling: { enabled: true, minReplicas: 2, maxReplicas: 5, targetCPU: 70 }
+  cart:
+    tag: latest
+    autoscaling: { enabled: true, minReplicas: 2, maxReplicas: 5, targetCPU: 70 }
+  orders:
+    tag: latest
+    autoscaling: { enabled: true, minReplicas: 2, maxReplicas: 4, targetCPU: 70 }
+  payment:
+    tag: latest
+    autoscaling: { enabled: true, minReplicas: 2, maxReplicas: 5, targetCPU: 70 }
+
+# 3 PostgreSQL members (one per Availability Zone), synchronous replication:
+# a failover never loses a confirmed order or payment
+postgres:
+  instances: 3
+  synchronousMode: true
+  persistence:
+    size: 20Gi
+
+valkey:
+  persistence:
+    size: 5Gi
+
+monitoring:
+  prometheusRule:
+    severity: critical
+  grafanaDashboard:
+    enabled: true

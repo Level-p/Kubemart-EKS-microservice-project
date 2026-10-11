@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Gear for people who ship</h1>
+<section class="grid">
+  {% for p in products %}
+  <article class="card">
+    <img src="{{ p.imageUrl }}" alt="{{ p.name }}" loading="lazy">
+    <div class="card-body">
+      <h2>{{ p.name }}</h2>
+      <p class="muted">{{ p.description }}</p>
+      <div class="row">
+        <strong>{{ p.priceCents|money(p.currency) }}</strong>
+        {% if p.stock > 0 %}
+        <form method="post" action="{{ url_for('add_to_cart') }}">
+          <input type="hidden" name="product_id" value="{{ p.id }}">
+          <button type="submit">Add to cart</button>
+        </form>
+        {% else %}
+        <button type="button" disabled>Sold out</button>
+        {% endif %}
+      </div>
+      {% if 0 < p.stock <= 5 %}<p class="muted">Only {{ p.stock }} left</p>{% endif %}
+    </div>
+  </article>
+  {% endfor %}
+</section>
+{% endblock %}

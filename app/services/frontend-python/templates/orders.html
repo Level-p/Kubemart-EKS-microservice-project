@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}Orders - KubeMart{% endblock %}
+{% block content %}
+<h1>Your orders</h1>
+{% if orders %}
+<table class="table">
+  <thead><tr><th>Order</th><th>Items</th><th>Total</th><th>Status</th><th>Placed</th></tr></thead>
+  <tbody>
+    {% for o in orders %}
+    <tr>
+      <td><code>{{ o.id }}</code></td>
+      <td>{{ o['items']|length }}</td>
+      <td>{{ o.totalCents|money(o.currency) }}</td>
+      <td><span class="status status-{{ o.status|lower }}">{{ o.status }}</span></td>
+      <td>{{ o.createdAt[:19]|replace('T', ' ') }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p>No orders yet.</p>
+{% endif %}
+{% endblock %}
