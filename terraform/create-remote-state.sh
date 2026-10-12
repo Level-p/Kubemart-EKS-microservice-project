@@ -58,6 +58,7 @@ fi
 
 # Newer repositories identify themselves as repo:OWNER@id/REPO@id. Ask GitHub.
 REPO=$(sed -n '/variable "github_repository"/,/^}/p' variable.tf | grep default | cut -d'"' -f2)
+REPO="${REPO#https://github.com/}"; REPO="${REPO%.git}"   # tolerate a pasted URL
 PREFIX=$(curl -s "https://api.github.com/repos/$REPO/actions/oidc/customization/sub" \
   | grep -o '"sub_claim_prefix": *"[^"]*"' | cut -d'"' -f4 || true)
 if [ -n "$PREFIX" ] && [ "$PREFIX" != "repo:$REPO" ]; then

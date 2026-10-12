@@ -10,9 +10,15 @@ variable "region" {
 }
 
 variable "github_repository" {
-  description = "GitHub repository allowed to deploy, in OWNER/REPO form"
+  description = "GitHub repository allowed to deploy, in OWNER/REPO form (no https://github.com/, no .git)"
   type        = string
-  default     = "Level-p/Kubemart-EKS-microservice-project.git"
+  default     = "Level-p/Kubemart-EKS-microservice-project"
+
+  # GitHub identifies the repository as OWNER/REPO; anything else never matches
+  validation {
+    condition     = can(regex("^[A-Za-z0-9-]+/[A-Za-z0-9._-]+$", var.github_repository)) && !endswith(var.github_repository, ".git")
+    error_message = "Use OWNER/REPO exactly as in the GitHub URL, without https://github.com/ and without .git (e.g. Level-p/my-repo)."
+  }
 }
 
 variable "github_subject_prefix" {
