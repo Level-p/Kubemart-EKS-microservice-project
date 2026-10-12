@@ -12,7 +12,7 @@ variable "region" {
 variable "github_repository" {
   description = "GitHub repository allowed to deploy, in OWNER/REPO form"
   type        = string
-  default     = "your-github-user/kubemart"
+  default     = "Level-p/Kubemart-EKS-microservice-project.git"
 }
 
 variable "github_subject_prefix" {

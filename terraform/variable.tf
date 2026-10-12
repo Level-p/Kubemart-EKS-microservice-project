@@ -29,7 +29,7 @@ variable "admin_principal_arns" {
     from your laptop, e.g. ["arn:aws:iam::123456789012:user/steven"].
   EOT
   type        = list(string)
-  default     = []
+  default     = ["arn:aws:iam::127214197057:user/levelp"]
 }
 
 variable "environments" {
@@ -52,7 +52,7 @@ variable "expose_prometheus" {
 variable "git_repo_url" {
   description = "HTTPS URL of THIS repository (Argo CD reads app/helm/ecommerce from it)"
   type        = string
-  default     = "https://github.com/your-github-user/kubemart.git"
+  default     = "https://github.com/Level-p/Kubemart-EKS-microservice-project.git"
 }
 
 variable "git_revision" {
