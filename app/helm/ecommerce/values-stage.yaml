@@ -3,12 +3,10 @@
 # Argo CD syncs this file automatically.
 global:
   environment: stage
-  imageRegistry: "<AWS_ACCOUNT_ID>.dkr.ecr.eu-west-2.amazonaws.com"
-
+  imageRegistry: "127214197057.dkr.ecr.eu-west-2.amazonaws.com"
 ingress:
   host: shop-stage.mfon21.space
   groupName: kubemart-stage
-
 services:
   frontend:
     tag: latest
@@ -20,12 +18,11 @@ services:
     tag: latest
     replicas: 1
   orders:
-    tag: latest
+    tag: 2-8fec5a9
     replicas: 1
   payment:
     tag: latest
     replicas: 1
-
 # Same 3-member setup as prod, so failovers can be rehearsed here first.
 # Asynchronous replication is enough for test data and a little faster.
 postgres:
@@ -33,7 +30,6 @@ postgres:
   synchronousMode: false
   persistence:
     size: 5Gi
-
 monitoring:
   prometheusRule:
     severity: warning
