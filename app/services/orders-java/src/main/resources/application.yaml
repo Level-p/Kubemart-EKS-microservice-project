@@ -8,7 +8,7 @@ spring:
   lifecycle:
     timeout-per-shutdown-phase: 20s
   http:
-    client:
+    clients:
       connect-timeout: 2s
       read-timeout: 5s
 

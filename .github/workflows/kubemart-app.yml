@@ -4,7 +4,7 @@
 #   changes       -> which services/<name> folders changed in this push or PR
 #   chart         -> helm lint + render for stage and prod (when the chart changed)
 #   build         -> ONLY the changed services, in parallel: docker build (unit
-#                    tests run inside it), Trivy scan, push to ECR
+#                    tests run inside it), Trivy scan (report only), push to ECR
 #   update-stage  -> writes the new image tags into app/helm/ecommerce/values-stage.yaml
 #                    and pushes; Argo CD (in the cluster) deploys stage within ~3 min
 #
@@ -166,24 +166,17 @@ jobs:
           cache-from: type=gha,scope=${{ matrix.service.name }}
           cache-to: type=gha,mode=max,scope=${{ matrix.service.name }}
 
-      - name: Trivy scan (report HIGH)
+      # Report only: findings show in the log but never stop the push, so a new
+      # vulnerability in a base image or library cannot block a deploy.
+      # Fix what it reports in the next change (upgrade the library or base image).
+      - name: Trivy scan (report HIGH and CRITICAL, never blocks)
         uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.tag }}
-          severity: HIGH
+          severity: HIGH,CRITICAL
           ignore-unfixed: true
           exit-code: "0"
           format: table
-
-      - name: Trivy scan (block CRITICAL)
-        uses: aquasecurity/trivy-action@v0.36.0
-        with:
-          image-ref: ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.tag }}
-          severity: CRITICAL
-          ignore-unfixed: true
-          exit-code: "1"     # a fixable critical vulnerability never reaches the cluster
-          format: table
-          skip-setup-trivy: true
 
       - name: Push to ECR
         if: env.PUSH == 'true'

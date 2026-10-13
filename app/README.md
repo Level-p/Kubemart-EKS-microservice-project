@@ -7,7 +7,7 @@ A small online shop written for this project to practise microservices on EKS, w
 | frontend | Python (Flask) | `services/frontend-python` | Storefront UI, the only public service | none |
 | product-catalog | Go | `services/product-catalog-go` | Products, prices, **stock** (reserve / release) | PostgreSQL `catalog` + Valkey cache |
 | cart | Rust (axum) | `services/cart-rust` | Carts | Valkey (`cart:<user>`, 30-day expiry) |
-| orders | Java (Spring Boot 3.5) | `services/orders-java` | Checkout orchestration, order history | PostgreSQL `orders` (Flyway migrations) |
+| orders | Java (Spring Boot 4.1) | `services/orders-java` | Checkout orchestration, order history | PostgreSQL `orders` (Flyway migrations) |
 | payment | Python (FastAPI) | `services/payment-python` | Fake payments (declines above £500), never charges an order twice | PostgreSQL `payments` |
 
 ```mermaid
@@ -76,7 +76,7 @@ The Java tests use an in-memory H2 database (PostgreSQL mode) and a fake downstr
 
 ## CI/CD
 
-- **GitHub Actions** ([`kubemart-app.yml`](../.github/workflows/kubemart-app.yml)): on every push it works out which `services/<name>/` folders changed and builds **only those services, in parallel** (a matrix job each). The unit tests run inside every `docker build`; Trivy reports HIGH and **blocks CRITICAL** vulnerabilities; the image goes to ECR as `<run>-<sha7>`. A last job writes the new tags of those services into `helm/ecommerce/values-stage.yaml` and pushes (`[skip ci]`). Pull requests build and test without pushing. *Run workflow* by hand rebuilds all five.
+- **GitHub Actions** ([`kubemart-app.yml`](../.github/workflows/kubemart-app.yml)): on every push it works out which `services/<name>/` folders changed and builds **only those services, in parallel** (a matrix job each). The unit tests run inside every `docker build`; Trivy reports HIGH and CRITICAL vulnerabilities in the log (report only: it never stops a deploy, so fix what it finds in the next change); the image goes to ECR as `<run>-<sha7>`. A last job writes the new tags of those services into `helm/ecommerce/values-stage.yaml` and pushes (`[skip ci]`). Pull requests build and test without pushing. *Run workflow* by hand rebuilds all five.
   - Changing only `helm/ecommerce/` builds nothing (the chart is linted and rendered); Argo CD deploys the chart change straight from Git.
   - AWS access uses GitHub OIDC: no AWS keys are stored anywhere.
 - **Promotion** ([`kubemart-promote.yml`](../.github/workflows/kubemart-promote.yml)): run by hand; waits for approval on the `production` environment, then copies the stage tags into `values-prod.yaml`.

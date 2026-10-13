@@ -35,7 +35,7 @@ kubemart/                              <- repository root
 | Application | 5 services in 4 languages, no data in memory, HPA on all five in prod |
 | Data | PostgreSQL 17 run by the **postgres-operator**: 3 members in 3 zones, automatic failover, synchronous replication in prod, one database per service; Valkey for carts and the catalog cache; nightly `pg_dump` to S3 |
 | Correctness | stock reserved in one SQL statement (never oversold), one payment per order, order saved before charging |
-| Delivery | GitHub OIDC (no AWS keys), only changed services rebuilt, Trivy blocks critical vulnerabilities, GitOps commit to stage, approval + Argo CD Sync for prod |
+| Delivery | GitHub OIDC (no AWS keys), only changed services rebuilt, Trivy vulnerability report on every image, GitOps commit to stage, approval + Argo CD Sync for prod |
 | Observability | Prometheus + Grafana (metrics, 18 alerts, dashboard) and Elasticsearch + Kibana (logs) |
 
 ## Diagrams
