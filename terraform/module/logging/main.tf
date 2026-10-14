@@ -20,6 +20,15 @@ locals {
   bucket          = "${var.name}-loki-${data.aws_caller_identity.current.account_id}"
   loki_push_url   = "http://loki.${local.namespace}.svc:3100/loki/api/v1/push"
   retention_hours = "${var.retention_days * 24}h"
+
+  # The Alloy chart passes its config through Helm's template engine (tpl), which
+  # would try to run the {{ }} that belong to Alloy (stage.template). Escape them
+  # so Helm prints them unchanged: {{ -> {{`{{`}}, }} -> {{`}}`}}
+  # (via placeholders, so the second replace does not touch the first one's output)
+  alloy_configs = { for f in ["pod-logs", "events"] : f => replace(replace(replace(replace(
+    file("${path.module}/config/${f}.alloy"),
+    "{{", "@@OPEN@@"), "}}", "@@CLOSE@@"), "@@OPEN@@", "{{`{{`}}"), "@@CLOSE@@", "{{`}}`}}")
+  }
 }
 
 resource "kubernetes_namespace_v1" "logging" {
@@ -200,7 +209,7 @@ resource "helm_release" "alloy_logs" {
       tolerations = [{ operator = "Exists" }] # every node
     }
     alloy = {
-      configMap = { content = file("${path.module}/config/pod-logs.alloy") }
+      configMap = { content = local.alloy_configs["pod-logs"] }
       mounts    = { varlog = true } # /var/log/pods on the node
       extraEnv  = [{ name = "LOKI_PUSH_URL", value = local.loki_push_url }]
       resources = {
@@ -225,7 +234,7 @@ resource "helm_release" "alloy_events" {
   values = [yamlencode({
     controller = { type = "deployment", replicas = 1 }
     alloy = {
-      configMap = { content = file("${path.module}/config/events.alloy") }
+      configMap = { content = local.alloy_configs["events"] }
       extraEnv  = [{ name = "LOKI_PUSH_URL", value = local.loki_push_url }]
       resources = {
         requests = { cpu = "10m", memory = "64Mi" }
