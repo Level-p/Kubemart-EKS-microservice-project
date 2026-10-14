@@ -21,4 +21,4 @@ Run a database backup now:
   kubectl create job --from=cronjob/kubemart-db-backup manual-backup -n {{ .Release.Namespace }}
 {{- end }}
 
-Metrics: Grafana dashboard "KubeMart overview". Logs: Kibana, search kubernetes.container_name : "orders".
+Metrics: Grafana dashboard "KubeMart overview". Logs: Grafana > Explore > Loki, e.g. {namespace="{{ .Release.Namespace }}", container="orders", level="error"}.

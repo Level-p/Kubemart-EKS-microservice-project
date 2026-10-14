@@ -219,7 +219,7 @@ struct AddItem {
 
 type ApiError = (StatusCode, Json<serde_json::Value>);
 
-/// One JSON log line per event (collected by Fluent Bit into Elasticsearch)
+/// One JSON log line per event (collected by Grafana Alloy into Loki)
 fn log(level: &str, message: &str, fields: serde_json::Value) {
     let mut line = json!({ "log.level": level, "service.name": "cart", "message": message });
     if let (Some(obj), Some(extra)) = (line.as_object_mut(), fields.as_object()) {

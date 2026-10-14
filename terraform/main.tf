@@ -1,7 +1,8 @@
 locals {
   name                 = "kubemart"
   cluster_name         = "kubemart-eks"
-  tools_alb_group_name = "platform-tools" # one ALB shared by Argo CD, Kibana and Grafana
+  tools_alb_group_name = "platform-tools"               # one ALB shared by Argo CD and Grafana
+  loki_url             = "http://loki.logging.svc:3100" # Grafana's Loki data source (module logging)
 }
 
 # ---- Lookups (created by the bootstrap stack) ----
@@ -84,6 +85,9 @@ module "monitoring" {
   alb_group_name     = local.tools_alb_group_name
   storage_class_name = module.eks_addons.storage_class_name
   expose_prometheus  = var.expose_prometheus
+  loki_url           = local.loki_url
+
+  alert_slack_webhook_url = var.alert_slack_webhook_url
 
   # The ALB controller webhook must be running before any Ingress is created,
   # and on destroy the Ingresses (ALBs) are removed before the controller.
@@ -98,15 +102,15 @@ module "postgres_operator" {
   depends_on = [module.eks_addons]
 }
 
-# ---- Centralised logging: Elasticsearch, Kibana, Fluent Bit ----
+# ---- Centralised logging: Loki (logs in S3) + Grafana Alloy, viewed in Grafana ----
 module "logging" {
   source             = "./module/logging"
-  domain_name        = var.domain_name
-  certificate_arn    = data.aws_acm_certificate.cert.arn
-  alb_group_name     = local.tools_alb_group_name
+  name               = local.name
+  cluster_name       = module.eks.cluster_name
   storage_class_name = module.eks_addons.storage_class_name
+  retention_days     = var.log_retention_days
 
-  # The Fluent Bit ServiceMonitor needs the Prometheus Operator CRDs
+  # The ServiceMonitors of Loki and Alloy need the Prometheus Operator CRDs
   depends_on = [module.eks_addons, module.monitoring]
 }
 

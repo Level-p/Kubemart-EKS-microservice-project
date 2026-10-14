@@ -1,7 +1,7 @@
 {
   "uid": "kubemart-overview",
   "title": "KubeMart overview",
-  "description": "KubeMart shop: services, checkout flow, PostgreSQL HA cluster, Valkey and backups. Logs are in Kibana.",
+  "description": "KubeMart shop: services, checkout flow, PostgreSQL HA cluster, Valkey and backups. Metrics from Prometheus, logs and Kubernetes events from Loki.",
   "tags": [
     "kubemart"
   ],
@@ -1810,6 +1810,141 @@
           "mode": "multi",
           "sort": "desc"
         }
+      }
+    },
+    {
+      "type": "row",
+      "title": "Logs and Kubernetes events (Loki)",
+      "id": 36,
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 61
+      },
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "Error log lines per minute",
+      "id": 37,
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "description": "Log lines with level error or fatal, per service. A spike here next to an error-rate spike above points to the cause.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 62
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "sum by (container) (count_over_time({namespace=\"$namespace\", level=~\"error|fatal|critical\"}[1m]))",
+          "legendFormat": "{{container}}",
+          "queryType": "range"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 60,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "logs",
+      "title": "Kubernetes warnings (OOMKilled, BackOff, failed probes, scheduling)",
+      "id": 38,
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "description": "Kubernetes events of type Warning, kept in Loki for the log retention period (Kubernetes itself forgets them after an hour).",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 62
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "{job=\"kubernetes-events\", namespace=\"$namespace\"} |= \"type=Warning\"",
+          "queryType": "range"
+        }
+      ],
+      "options": {
+        "showTime": true,
+        "wrapLogMessage": true,
+        "sortOrder": "Descending",
+        "enableLogDetails": true,
+        "dedupStrategy": "none"
+      }
+    },
+    {
+      "type": "logs",
+      "title": "Recent errors and warnings",
+      "id": 39,
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "description": "The log lines behind the errors. Click a line for all its fields; open Explore > Loki for any other search.",
+      "gridPos": {
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 70
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "{namespace=\"$namespace\", level=~\"error|fatal|critical|warn|warning\"}",
+          "queryType": "range"
+        }
+      ],
+      "options": {
+        "showTime": true,
+        "showLabels": false,
+        "wrapLogMessage": true,
+        "sortOrder": "Descending",
+        "enableLogDetails": true,
+        "prettifyLogMessage": false,
+        "dedupStrategy": "none"
       }
     }
   ]

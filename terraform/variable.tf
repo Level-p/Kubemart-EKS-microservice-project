@@ -17,7 +17,7 @@ variable "kubernetes_version" {
 }
 
 variable "node_instance_types" {
-  description = "Elasticsearch needs memory, so use at least t3.large"
+  description = "Prometheus, Loki and 6 database pods need memory, so use at least t3.large"
   type        = list(string)
   default     = ["t3.large"]
 }
@@ -47,6 +47,19 @@ variable "expose_prometheus" {
   description = "Publish Prometheus on https://prometheus.<domain> (it has no login, so keep false and use kubectl port-forward)"
   type        = bool
   default     = false
+}
+
+variable "log_retention_days" {
+  description = "Days of container logs and Kubernetes events kept in Loki"
+  type        = number
+  default     = 7
+}
+
+variable "alert_slack_webhook_url" {
+  description = "Slack incoming webhook where Alertmanager posts alerts (the workflow passes the ALERT_SLACK_WEBHOOK_URL secret as TF_VAR_alert_slack_webhook_url). Empty = alerts are only shown in Grafana"
+  type        = string
+  default     = ""
+  sensitive   = true
 }
 
 variable "git_repo_url" {

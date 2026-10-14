@@ -17,7 +17,7 @@ kubemart/                              <- repository root
 │   │                                  ServiceMonitors, 18 alerts, Grafana dashboard
 │   ├── argocd/                        AppProject + Applications (Terraform creates the same)
 │   └── docker-compose.yml             the whole shop + PostgreSQL + Valkey on your laptop
-├── terraform/                         VPC, EKS, ECR, add-ons, Prometheus/Grafana, Elasticsearch/Kibana,
+├── terraform/                         VPC, EKS, ECR, add-ons, Prometheus/Grafana, Loki (logs in S3),
 │   └── bootstrap/                     postgres-operator, namespaces, backup bucket, Argo CD
 │                                      (bootstrap: GitHub OIDC role + wildcard certificate)
 ├── .github/workflows/
@@ -36,7 +36,7 @@ kubemart/                              <- repository root
 | Data | PostgreSQL 17 run by the **postgres-operator**: 3 members in 3 zones, automatic failover, synchronous replication in prod, one database per service; Valkey for carts and the catalog cache; nightly `pg_dump` to S3 |
 | Correctness | stock reserved in one SQL statement (never oversold), one payment per order, order saved before charging |
 | Delivery | GitHub OIDC (no AWS keys), only changed services rebuilt, Trivy vulnerability report on every image, GitOps commit to stage, approval + Argo CD Sync for prod |
-| Observability | Prometheus + Grafana (metrics, 18 alerts, dashboard) and Elasticsearch + Kibana (logs) |
+| Observability | Prometheus + Grafana + Loki: metrics, 18 alerts (to Slack through Alertmanager), and every container log and Kubernetes event in the same Grafana. Logs are kept in S3 |
 
 ## Diagrams
 

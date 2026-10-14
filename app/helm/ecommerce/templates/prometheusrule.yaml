@@ -43,7 +43,7 @@ spec:
           labels: { severity: {{ $sev }} }
           annotations:
             summary: "More than 5% of {{`{{ $labels.service }}`}} requests fail ({{`{{ $value | humanizePercentage }}`}})"
-            description: "Search the logs in Kibana: kubernetes.container_name : \"{{`{{ $labels.service }}`}}\" and log_level : \"error\""
+            description: "Logs in Grafana (Explore > Loki): {namespace=\"{{ $ns }}\", container=\"{{`{{ $labels.service }}`}}\", level=\"error\"}"
         - alert: KubeMartSlowResponses
           expr: |
             histogram_quantile(0.95,

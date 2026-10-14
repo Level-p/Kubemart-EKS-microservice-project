@@ -1,0 +1,98 @@
+// Grafana Alloy, one per node (DaemonSet): reads the log files of every
+// container on its node and sends them to Loki.
+//
+// Labels (what you filter on in Grafana): namespace, pod, container, app, node
+// and level. level comes from the JSON log line, in lower case: the Go, Rust
+// and Python services write the key "log.level", the Java service writes
+// {"log": {"level": ...}} (Elastic Common Schema), other software "level".
+
+// The pods running on this node (the chart sets HOSTNAME to the node name)
+discovery.kubernetes "pods" {
+  role = "pod"
+
+  selectors {
+    role  = "pod"
+    field = "spec.nodeName=" + sys.env("HOSTNAME")
+  }
+}
+
+discovery.relabel "pods" {
+  targets = discovery.kubernetes.pods.targets
+
+  rule {
+    source_labels = ["__meta_kubernetes_namespace"]
+    target_label  = "namespace"
+  }
+
+  rule {
+    source_labels = ["__meta_kubernetes_pod_name"]
+    target_label  = "pod"
+  }
+
+  rule {
+    source_labels = ["__meta_kubernetes_pod_container_name"]
+    target_label  = "container"
+  }
+
+  rule {
+    source_labels = ["__meta_kubernetes_pod_label_app_kubernetes_io_name"]
+    target_label  = "app"
+  }
+
+  rule {
+    source_labels = ["__meta_kubernetes_pod_node_name"]
+    target_label  = "node"
+  }
+
+  // The kubelet writes /var/log/pods/<namespace>_<pod>_<uid>/<container>/<restart>.log.
+  // Every restart is a new file and the previous one is kept, so the last
+  // lines before a crash are collected too.
+  rule {
+    source_labels = ["__meta_kubernetes_pod_uid", "__meta_kubernetes_pod_container_name"]
+    separator     = "/"
+    target_label  = "__path__"
+    replacement   = "/var/log/pods/*$1/*.log"
+  }
+}
+
+local.file_match "pods" {
+  path_targets = discovery.relabel.pods.output
+}
+
+loki.source.file "pods" {
+  targets    = local.file_match.pods.targets
+  forward_to = [loki.process.pods.receiver]
+}
+
+loki.process "pods" {
+  // Container runtime format: "<time> stdout F <line>"
+  stage.cri {}
+
+  // Severity from JSON lines; other lines are passed on unchanged
+  stage.json {
+    expressions = {
+      level_dotted = "\"log.level\"",
+      level_nested = "log.level",
+      level_plain  = "level",
+    }
+  }
+
+  stage.template {
+    source   = "level"
+    template = "{{ with .level_dotted }}{{ ToLower . }}{{ else }}{{ with .level_nested }}{{ ToLower . }}{{ else }}{{ with .level_plain }}{{ ToLower . }}{{ end }}{{ end }}{{ end }}"
+  }
+
+  stage.labels {
+    values = {
+      level = "",
+    }
+  }
+
+  forward_to = [loki.write.default.receiver]
+}
+
+loki.write "default" {
+  endpoint {
+    url = sys.env("LOKI_PUSH_URL")
+  }
+}

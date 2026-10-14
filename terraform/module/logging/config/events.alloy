@@ -1,0 +1,18 @@
+// Grafana Alloy, one replica: stores Kubernetes events in Loki, so the
+// reasons behind a problem stay searchable after Kubernetes forgets them
+// (it keeps events for one hour): OOMKilled, BackOff, FailedScheduling,
+// Unhealthy (failed probes), FailedMount...
+//
+// In Grafana: {job="kubernetes-events", namespace="kubemart-prod"}
+
+loki.source.kubernetes_events "cluster" {
+  job_name   = "kubernetes-events"
+  log_format = "logfmt"
+  forward_to = [loki.write.default.receiver]
+}
+
+loki.write "default" {
+  endpoint {
+    url = sys.env("LOKI_PUSH_URL")
+  }
+}

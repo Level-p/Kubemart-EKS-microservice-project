@@ -1,122 +1,239 @@
 # ---------------------------------------------------------------------------
-# Centralised logging (EFK):
-#   ECK operator      -> manages Elasticsearch and Kibana on Kubernetes
-#   elastic-stack     -> local chart: Elasticsearch (StatefulSet + EBS) + Kibana + Ingress
-#   Fluent Bit        -> DaemonSet that tails every container log on every node
-#                        and ships it to Elasticsearch
+# Centralised logging with Loki (viewed in Grafana, next to the metrics):
+#   S3 bucket          -> where Loki keeps the logs (cheap; nothing to size)
+#   IAM role           -> lets the Loki pod use that bucket (EKS Pod Identity, no keys)
+#   Loki               -> one pod (single binary), indexes only labels, compactor
+#                         deletes logs older than var.retention
+#   Alloy (DaemonSet)  -> on every node: reads every container's log files and
+#                         sends them to Loki, labelled namespace/pod/container/level
+#   Alloy (events)     -> one pod: stores Kubernetes events (OOMKilled, BackOff,
+#                         FailedScheduling...) in Loki
+# Grafana gets Loki as a data source in module "monitoring".
 # ---------------------------------------------------------------------------
 
+data "aws_caller_identity" "current" {}
+data "aws_region" "current" {}
+
 locals {
-  namespace   = "logging"
-  es_name     = "logging"
-  kibana_host = "kibana.${var.domain_name}"
-
-  # Fluent Bit output. $${...} escapes Terraform interpolation, so Fluent Bit
-  # receives the literal ${ES_PASSWORD} and reads it from the environment.
-  fluent_bit_outputs = <<-EOT
-    [OUTPUT]
-        Name               es
-        Match              kube.*
-        Host               ${local.es_name}-es-http.${local.namespace}.svc
-        Port               9200
-        HTTP_User          elastic
-        HTTP_Passwd        $${ES_PASSWORD}
-        tls                On
-        tls.verify         Off
-        Logstash_Format    On
-        Logstash_Prefix    kubernetes
-        Time_Key           ingest_timestamp
-        Suppress_Type_Name On
-        Replace_Dots       On
-        Trace_Error        On
-        Retry_Limit        5
-  EOT
-
-  # Only container logs (the chart default also reads systemd journals)
-  fluent_bit_inputs = <<-EOT
-    [INPUT]
-        Name              tail
-        Path              /var/log/containers/*.log
-        Exclude_Path      /var/log/containers/fluent-bit*
-        multiline.parser  docker, cri
-        Tag               kube.*
-        Mem_Buf_Limit     10MB
-        Skip_Long_Lines   On
-  EOT
+  namespace       = "logging"
+  loki_sa         = "loki"
+  bucket          = "${var.name}-loki-${data.aws_caller_identity.current.account_id}"
+  loki_push_url   = "http://loki.${local.namespace}.svc:3100/loki/api/v1/push"
+  retention_hours = "${var.retention_days * 24}h"
 }
 
-# ---- ECK operator ----
-resource "helm_release" "eck_operator" {
-  name             = "elastic-operator"
-  repository       = "https://helm.elastic.co"
-  chart            = "eck-operator"
-  version          = var.eck_operator_chart_version
-  namespace        = "elastic-system"
-  create_namespace = true
-  wait             = true
+resource "kubernetes_namespace_v1" "logging" {
+  metadata {
+    name = local.namespace
+  }
 }
 
-# ---- Elasticsearch + Kibana (CRDs from the operator above) ----
-resource "helm_release" "elastic_stack" {
-  name             = "elastic-stack"
-  chart            = "${path.module}/charts/elastic-stack"
-  namespace        = local.namespace
-  create_namespace = true
-
-  values = [yamlencode({
-    name    = local.es_name
-    version = var.elastic_version
-    elasticsearch = {
-      nodeCount    = var.elasticsearch_node_count
-      storageClass = var.storage_class_name
-      storageSize  = var.elasticsearch_storage_size
-      memory       = "2Gi"
-      cpu          = "500m"
-    }
-    kibana = {
-      host   = local.kibana_host
-      memory = "1Gi"
-      cpu    = "250m"
-    }
-    ingress = {
-      className      = "alb"
-      groupName      = var.alb_group_name
-      certificateArn = var.certificate_arn
-    }
-  })]
-
-  depends_on = [helm_release.eck_operator]
+# ---- 1. Log storage: S3 ----
+resource "aws_s3_bucket" "loki" {
+  bucket        = local.bucket
+  force_destroy = true # logs are disposable; terraform destroy empties the bucket
 }
 
-# ---- Fluent Bit log shipper ----
-resource "helm_release" "fluent_bit" {
-  name       = "fluent-bit"
-  repository = "https://fluent.github.io/helm-charts"
-  chart      = "fluent-bit"
-  version    = var.fluent_bit_chart_version
-  namespace  = local.namespace
+resource "aws_s3_bucket_public_access_block" "loki" {
+  bucket                  = aws_s3_bucket.loki.id
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
 
-  values = [yamlencode({
-    # Password Secret created by ECK for the "elastic" user
-    env = [{
-      name = "ES_PASSWORD"
-      valueFrom = {
-        secretKeyRef = {
-          name = "${local.es_name}-es-elastic-user"
-          key  = "elastic"
-        }
-      }
+resource "aws_s3_bucket_server_side_encryption_configuration" "loki" {
+  bucket = aws_s3_bucket.loki.id
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"
+    }
+  }
+}
+
+resource "aws_s3_bucket_policy" "loki_tls" {
+  bucket = aws_s3_bucket.loki.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid       = "DenyInsecureTransport"
+      Effect    = "Deny"
+      Principal = "*"
+      Action    = "s3:*"
+      Resource  = [aws_s3_bucket.loki.arn, "${aws_s3_bucket.loki.arn}/*"]
+      Condition = { Bool = { "aws:SecureTransport" = "false" } }
     }]
-    config = {
-      inputs  = local.fluent_bit_inputs
-      outputs = local.fluent_bit_outputs
+  })
+
+  depends_on = [aws_s3_bucket_public_access_block.loki]
+}
+
+# Safety net: Loki's compactor deletes old logs itself; anything it misses goes after twice the retention
+resource "aws_s3_bucket_lifecycle_configuration" "loki" {
+  bucket = aws_s3_bucket.loki.id
+  rule {
+    id     = "expire-leftovers"
+    status = "Enabled"
+    filter {}
+    expiration {
+      days = var.retention_days * 2
     }
-    # Prometheus scrapes Fluent Bit, so "logs are not reaching Elasticsearch"
-    # shows up in Grafana (fluentbit_output_errors_total)
-    serviceMonitor = {
-      enabled = var.enable_service_monitor
+    abort_incomplete_multipart_upload {
+      days_after_initiation = 1
     }
+  }
+}
+
+# ---- 2. Loki's AWS access (EKS Pod Identity) ----
+resource "aws_iam_role" "loki" {
+  name = "${var.name}-loki"
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = { Service = "pods.eks.amazonaws.com" }
+      Action    = ["sts:AssumeRole", "sts:TagSession"]
+    }]
+  })
+}
+
+resource "aws_iam_role_policy" "loki" {
+  name = "loki-bucket"
+  role = aws_iam_role.loki.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      { Effect = "Allow", Action = ["s3:ListBucket"], Resource = aws_s3_bucket.loki.arn },
+      { Effect = "Allow", Action = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"], Resource = "${aws_s3_bucket.loki.arn}/*" },
+    ]
+  })
+}
+
+resource "aws_eks_pod_identity_association" "loki" {
+  cluster_name    = var.cluster_name
+  namespace       = local.namespace
+  service_account = local.loki_sa
+  role_arn        = aws_iam_role.loki.arn
+}
+
+# ---- 3. Loki ----
+resource "helm_release" "loki" {
+  name       = "loki"
+  repository = "https://grafana.github.io/helm-charts"
+  chart      = "loki"
+  version    = var.loki_chart_version
+  namespace  = kubernetes_namespace_v1.logging.metadata[0].name
+  timeout    = 600
+
+  values = [yamlencode({
+    deploymentMode = "SingleBinary"
+    loki = {
+      auth_enabled = false # one tenant: the whole cluster
+      commonConfig = { replication_factor = 1 }
+      schemaConfig = {
+        configs = [{
+          from         = "2026-01-01"
+          store        = "tsdb"
+          object_store = "s3"
+          schema       = "v13"
+          index        = { prefix = "loki_index_", period = "24h" }
+        }]
+      }
+      storage = {
+        type        = "s3"
+        bucketNames = { chunks = aws_s3_bucket.loki.bucket, ruler = aws_s3_bucket.loki.bucket, admin = aws_s3_bucket.loki.bucket }
+        s3          = { region = data.aws_region.current.region }
+      }
+      limits_config = {
+        retention_period           = local.retention_hours
+        reject_old_samples         = true
+        reject_old_samples_max_age = "168h"
+        max_query_lookback         = local.retention_hours
+        volume_enabled             = true
+      }
+      compactor = {
+        retention_enabled    = true
+        delete_request_store = "s3"
+      }
+    }
+    serviceAccount = { create = true, name = local.loki_sa }
+    singleBinary = {
+      replicas = 1
+      persistence = {
+        enabled      = true
+        storageClass = var.storage_class_name
+        size         = "10Gi" # write-ahead log and index cache; the logs themselves are in S3
+      }
+      resources = {
+        requests = { cpu = "100m", memory = "512Mi" }
+        limits   = { memory = "1Gi" }
+      }
+    }
+    # Simple-scalable components and caches off: one pod is plenty for a startup
+    backend      = { replicas = 0 }
+    read         = { replicas = 0 }
+    write        = { replicas = 0 }
+    chunksCache  = { enabled = false }
+    resultsCache = { enabled = false }
+    gateway      = { enabled = false }
+    lokiCanary   = { enabled = false }
+    test         = { enabled = false }
+    minio        = { enabled = false }
+    # Prometheus watches Loki itself (ingestion, errors)
+    monitoring = { serviceMonitor = { enabled = true } }
   })]
 
-  depends_on = [helm_release.elastic_stack]
+  depends_on = [aws_eks_pod_identity_association.loki, aws_iam_role_policy.loki]
+}
+
+# ---- 4. Log collection: Alloy on every node ----
+resource "helm_release" "alloy_logs" {
+  name       = "alloy-logs"
+  repository = "https://grafana.github.io/helm-charts"
+  chart      = "alloy"
+  version    = var.alloy_chart_version
+  namespace  = kubernetes_namespace_v1.logging.metadata[0].name
+
+  values = [yamlencode({
+    controller = {
+      type        = "daemonset"
+      tolerations = [{ operator = "Exists" }] # every node
+    }
+    alloy = {
+      configMap = { content = file("${path.module}/config/pod-logs.alloy") }
+      mounts    = { varlog = true } # /var/log/pods on the node
+      extraEnv  = [{ name = "LOKI_PUSH_URL", value = local.loki_push_url }]
+      resources = {
+        requests = { cpu = "50m", memory = "128Mi" }
+        limits   = { memory = "384Mi" }
+      }
+    }
+    serviceMonitor = { enabled = true }
+  })]
+
+  depends_on = [helm_release.loki]
+}
+
+# ---- 5. Kubernetes events: one Alloy ----
+resource "helm_release" "alloy_events" {
+  name       = "alloy-events"
+  repository = "https://grafana.github.io/helm-charts"
+  chart      = "alloy"
+  version    = var.alloy_chart_version
+  namespace  = kubernetes_namespace_v1.logging.metadata[0].name
+
+  values = [yamlencode({
+    controller = { type = "deployment", replicas = 1 }
+    alloy = {
+      configMap = { content = file("${path.module}/config/events.alloy") }
+      extraEnv  = [{ name = "LOKI_PUSH_URL", value = local.loki_push_url }]
+      resources = {
+        requests = { cpu = "10m", memory = "64Mi" }
+        limits   = { memory = "256Mi" }
+      }
+    }
+    serviceMonitor = { enabled = true }
+  })]
+
+  depends_on = [helm_release.loki]
 }

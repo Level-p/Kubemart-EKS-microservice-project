@@ -147,7 +147,7 @@ func (a *api) routes() http.Handler {
 }
 
 // instrument records metrics and writes one JSON log line per request
-// (shipped to Elasticsearch by Fluent Bit).
+// (shipped to Loki by Grafana Alloy).
 func (a *api) instrument(mux *http.ServeMux) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
@@ -203,7 +203,7 @@ func databaseURL() string {
 }
 
 func main() {
-	// ECS-style field names so every service's logs share one Elasticsearch mapping
+	// ECS-style field names, the same in every service, so one search finds them all
 	handler := slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
 		ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
 			switch a.Key {

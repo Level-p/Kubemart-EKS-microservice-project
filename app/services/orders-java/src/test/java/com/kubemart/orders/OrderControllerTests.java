@@ -182,4 +182,13 @@ class OrderControllerTests {
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(response.getBody()).contains("jvm_memory_used_bytes");
     }
+
+    @Test
+    void httpMetricsMatchTheOtherServices() {
+        rest.getForEntity("/orders/does-not-exist", String.class);
+        String body = rest.getForEntity("/actuator/prometheus", String.class).getBody();
+        // Same names and labels as the Go, Rust and Python services, with the route pattern
+        assertThat(body).contains("http_requests_total{application=\"orders\",method=\"GET\",route=\"/orders/{id}\",status=\"404\"}");
+        assertThat(body).contains("http_request_duration_seconds_bucket{application=\"orders\",method=\"GET\",route=\"/orders/{id}\",le=\"0.25\"}");
+    }
 }

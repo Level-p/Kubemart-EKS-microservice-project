@@ -44,15 +44,14 @@ management:
     health:
       probes:
         enabled: true       # /actuator/health/liveness and /readiness
+  # Request rate, errors and response time are published by HttpMetricsFilter
+  # under the same names as the other services (http_requests_total,
+  # http_request_duration_seconds)
   metrics:
     tags:
       application: orders
-    distribution:
-      # Histogram buckets so Grafana can show the 95th percentile response time
-      percentiles-histogram:
-        http.server.requests: true
 
-# JSON logs in Elastic Common Schema: Elasticsearch/Kibana understand them directly
+# JSON logs in Elastic Common Schema (log.level, message...): Loki and Grafana read the fields directly
 logging:
   structured:
     format:

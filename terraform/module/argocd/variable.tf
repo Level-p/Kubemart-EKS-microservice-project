@@ -41,7 +41,7 @@ variable "enable_service_monitors" {
 
 variable "argocd_chart_version" {
   type    = string
-  default = "10.9.6"
+  default = "10.10.3" # Argo CD v3.5.5
 }
 
 variable "argocd_apps_chart_version" {

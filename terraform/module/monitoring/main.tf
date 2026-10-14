@@ -3,15 +3,53 @@
 # Grafana, node-exporter and kube-state-metrics in one Helm release.
 # Prometheus and Grafana keep their data on gp3 EBS volumes (StatefulSets).
 #
-# Logs stay in Elasticsearch/Kibana (module logging). Together they answer:
-#   Grafana: is something wrong, where, since when?   Kibana: why?
+# Logs are in Loki (module logging), added to Grafana as a data source, so one
+# screen answers: is something wrong, where, since when (metrics) and why (logs).
+# Alertmanager posts alerts to Slack when var.alert_slack_webhook_url is set.
 # ---------------------------------------------------------------------------
 
 locals {
   grafana_host    = "grafana.${var.domain_name}"
   prometheus_host = "prometheus.${var.domain_name}"
 
-  # Same ALB as Argo CD and Kibana (IngressGroup "platform-tools")
+  # Same ALB as Argo CD (IngressGroup "platform-tools")
+
+  # Only "is a webhook set?" is revealed, never the URL itself
+  slack_enabled = nonsensitive(var.alert_slack_webhook_url != "")
+
+  # Alertmanager: every alert to Slack (when a webhook is set), grouped per alert and
+  # namespace, repeated every 4 hours while it fires, and once more when it resolves.
+  # The webhook URL is read from a mounted Secret, so it never appears in the config.
+  alertmanager_config = {
+    global = { resolve_timeout = "5m" }
+    route = {
+      receiver        = local.slack_enabled ? "slack" : "null"
+      group_by        = ["alertname", "namespace"]
+      group_wait      = "30s"
+      group_interval  = "5m"
+      repeat_interval = "4h"
+      routes = [
+        # Always-firing helpers of kube-prometheus-stack, and informational alerts
+        { receiver = "null", matchers = ["alertname =~ \"Watchdog|InfoInhibitor\""] },
+        { receiver = "null", matchers = ["severity = \"info\""] },
+      ]
+    }
+    inhibit_rules = [
+      # A critical alert hides the warning with the same name and namespace
+      { source_matchers = ["severity = \"critical\""], target_matchers = ["severity = \"warning\""], equal = ["alertname", "namespace"] },
+    ]
+    receivers = concat([{ name = "null" }], local.slack_enabled ? [{
+      name = "slack"
+      slack_configs = [{
+        api_url_file  = "/etc/alertmanager/secrets/alertmanager-slack/webhook-url"
+        send_resolved = true
+        color         = "{{ if eq .Status \"firing\" }}{{ if eq .CommonLabels.severity \"critical\" }}danger{{ else }}warning{{ end }}{{ else }}good{{ end }}"
+        title         = "[{{ .Status | toUpper }}] {{ .CommonLabels.alertname }}{{ if .CommonLabels.namespace }} ({{ .CommonLabels.namespace }}){{ end }}"
+        title_link    = "https://${local.grafana_host}/d/kubemart-overview"
+        text          = "{{ range .Alerts }}*{{ .Labels.severity }}*: {{ if .Annotations.summary }}{{ .Annotations.summary }}{{ else }}{{ .Annotations.description }}{{ end }}\n{{ end }}"
+      }]
+    }] : [])
+  }
   alb_annotations = {
     "alb.ingress.kubernetes.io/scheme"          = "internet-facing"
     "alb.ingress.kubernetes.io/target-type"     = "ip"
@@ -52,6 +90,16 @@ locals {
         accessModes      = ["ReadWriteOnce"]
         size             = "10Gi"
       }
+      # Logs next to the metrics: Explore > Loki, and the log panels of KubeMart overview
+      additionalDataSources = [{
+        name      = "Loki"
+        uid       = "loki"
+        type      = "loki"
+        access    = "proxy"
+        url       = var.loki_url
+        isDefault = false
+        jsonData  = { maxLines = 1000 }
+      }]
       sidecar = {
         dashboards = {
           enabled         = true
@@ -77,7 +125,7 @@ locals {
       prometheusSpec = {
         retention = var.prometheus_retention
         # Discover ServiceMonitors / PrometheusRules from ALL Helm releases,
-        # not only from this one (needed for the KubeMart chart, Argo CD and Fluent Bit)
+        # not only from this one (needed for the KubeMart chart, Argo CD, Loki and Alloy)
         serviceMonitorSelectorNilUsesHelmValues = false
         podMonitorSelectorNilUsesHelmValues     = false
         ruleSelectorNilUsesHelmValues           = false
@@ -98,7 +146,10 @@ locals {
     }
 
     alertmanager = {
+      config = local.alertmanager_config
       alertmanagerSpec = {
+        # Mounted at /etc/alertmanager/secrets/alertmanager-slack/ (created below)
+        secrets = local.slack_enabled ? ["alertmanager-slack"] : []
         storage = {
           volumeClaimTemplate = {
             spec = {
@@ -136,4 +187,18 @@ resource "helm_release" "kube_prometheus_stack" {
     name  = "grafana.adminPassword"
     value = random_password.grafana_admin.result
   }]
+}
+
+# Slack incoming webhook for Alertmanager (the pod waits for it to exist)
+resource "kubernetes_secret_v1" "alertmanager_slack" {
+  count = local.slack_enabled ? 1 : 0
+
+  metadata {
+    name      = "alertmanager-slack"
+    namespace = helm_release.kube_prometheus_stack.namespace
+  }
+
+  data = {
+    "webhook-url" = var.alert_slack_webhook_url
+  }
 }

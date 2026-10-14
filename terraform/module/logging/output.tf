@@ -1,8 +1,9 @@
-output "kibana_url" {
-  value = "https://${local.kibana_host}"
+output "loki_url" {
+  description = "In-cluster address of Loki (Grafana's Loki data source)"
+  value       = "http://loki.${local.namespace}.svc:3100"
 }
 
-output "elastic_password_command" {
-  description = "Kibana login: user elastic, password from this command"
-  value       = "kubectl get secret ${local.es_name}-es-elastic-user -n ${local.namespace} -o jsonpath='{.data.elastic}' | base64 -d"
+output "bucket" {
+  description = "S3 bucket holding the logs"
+  value       = aws_s3_bucket.loki.bucket
 }

@@ -8,7 +8,7 @@ variable "certificate_arn" {
 }
 
 variable "alb_group_name" {
-  description = "IngressGroup shared with Argo CD and Kibana (one ALB for the platform tools)"
+  description = "IngressGroup shared with Argo CD (one ALB for the platform tools)"
   type        = string
 }
 
@@ -35,4 +35,16 @@ variable "prometheus_storage_size" {
 variable "chart_version" {
   type    = string
   default = "91.9.0"
+}
+
+variable "loki_url" {
+  description = "Loki address for Grafana's data source (module logging)"
+  type        = string
+}
+
+variable "alert_slack_webhook_url" {
+  description = "Slack incoming webhook for Alertmanager. Empty = alerts are only shown in Grafana and Alertmanager"
+  type        = string
+  default     = ""
+  sensitive   = true
 }

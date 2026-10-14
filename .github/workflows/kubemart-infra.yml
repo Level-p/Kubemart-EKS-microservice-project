@@ -1,6 +1,6 @@
 # ---------------------------------------------------------------------------
 # KubeMart infrastructure: Terraform for VPC, EKS, ECR, add-ons, Prometheus,
-# Grafana, Elasticsearch/Kibana, the postgres-operator, the stage/prod
+# Grafana and Loki, the postgres-operator, the stage/prod
 # namespaces and backup bucket, and Argo CD (folder: terraform/).
 #
 # Push to main  -> scan, plan, apply (apply waits for "infrastructure" approval)
@@ -10,6 +10,8 @@
 # Required repository secret:  AWS_ROLE_ARN   (bootstrap output github_actions_role_arn)
 # Optional repository secret:  GIT_REPO_TOKEN (read-only token, only for a PRIVATE repo,
 #                                              so Argo CD can read it)
+# Optional repository secret:  ALERT_SLACK_WEBHOOK_URL (Slack incoming webhook: Alertmanager
+#                                              posts alerts there; without it they stay in Grafana)
 # GitHub environment:          "infrastructure" with required reviewers
 # ---------------------------------------------------------------------------
 name: KubeMart Infrastructure
@@ -46,6 +48,7 @@ env:
   TF_VERSION: 1.15.6
   CLUSTER_NAME: kubemart-eks
   TF_VAR_git_repo_token: ${{ secrets.GIT_REPO_TOKEN }}
+  TF_VAR_alert_slack_webhook_url: ${{ secrets.ALERT_SLACK_WEBHOOK_URL }}
   TF_IN_AUTOMATION: "true"
 
 jobs:
@@ -189,11 +192,14 @@ jobs:
           terraform_version: ${{ env.TF_VERSION }}
           terraform_wrapper: false
 
-      # Argo CD applications own the shop's ALBs; remove them while the load
-      # balancer controller still runs, or the ALBs block the VPC deletion.
+      # Every ALB is created by the load balancer controller from an Ingress, so
+      # Terraform does not know about them. Delete them all here, while the
+      # controller can still reach AWS: once Terraform removes the NAT gateway
+      # the controller is cut off, the ALBs stay, and their public IPs block the
+      # subnet and internet gateway deletion (DependencyViolation).
       # The database and Valkey are marked "never delete" for Argo CD
       # (Delete=false), so they are removed here on purpose, with their disks.
-      - name: Remove KubeMart, its databases and their volumes
+      - name: Remove KubeMart, its databases and every load balancer
         continue-on-error: true
         run: |
           aws eks update-kubeconfig --name "$CLUSTER_NAME" --region "$AWS_REGION" || exit 0
@@ -203,10 +209,20 @@ jobs:
             kubectl delete statefulset --all -n "$ns" --wait=true --timeout=5m || true
             kubectl delete pvc --all -n "$ns" --wait=false || true
           done
-          kubectl delete pvc --all -n logging --wait=false || true
+          # Argo CD and Grafana share the "platform-tools" ALB
+          kubectl delete ingress --all -A --wait=true --timeout=5m || true
+          kubectl get svc -A --no-headers | awk '$3=="LoadBalancer"{print $1" "$2}' | while read -r ns name; do
+            kubectl delete svc "$name" -n "$ns" --wait=true --timeout=5m || true
+          done
           kubectl delete pvc --all -n monitoring --wait=false || true
-          echo "Waiting 60s for the load balancer controller to delete the ALBs..."
-          sleep 60
+
+          VPC=$(aws eks describe-cluster --name "$CLUSTER_NAME" --query cluster.resourcesVpcConfig.vpcId --output text)
+          for i in $(seq 1 30); do
+            LEFT=$(aws elbv2 describe-load-balancers --query "length(LoadBalancers[?VpcId=='$VPC'])" --output text)
+            [ "$LEFT" = "0" ] && { echo "All load balancers deleted"; exit 0; }
+            echo "Waiting for $LEFT load balancer(s) to be deleted..."; sleep 10
+          done
+          echo "::warning::Load balancers still exist in $VPC; the VPC deletion may fail. Delete them in the EC2 console and run destroy again."
 
       - name: Terraform init
         run: terraform init -input=false

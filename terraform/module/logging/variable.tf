@@ -1,48 +1,28 @@
-variable "domain_name" {
-  type = string
-}
-
-variable "certificate_arn" {
-  type = string
-}
-
-variable "alb_group_name" {
-  description = "IngressGroup shared with Argo CD (one ALB for the platform tools)"
+variable "name" {
+  description = "Prefix for the S3 bucket and IAM role"
   type        = string
+}
+
+variable "cluster_name" {
+  type = string
 }
 
 variable "storage_class_name" {
   type = string
 }
 
-variable "enable_service_monitor" {
-  description = "Create a ServiceMonitor for Fluent Bit (needs kube-prometheus-stack installed first)"
-  type        = bool
-  default     = true
+variable "retention_days" {
+  description = "Days of logs kept in Loki (and S3)"
+  type        = number
+  default     = 7
 }
 
-variable "elastic_version" {
-  description = "Elasticsearch and Kibana version"
-  type        = string
-  default     = "9.4.8"
-}
-
-variable "elasticsearch_node_count" {
-  type    = number
-  default = 1
-}
-
-variable "elasticsearch_storage_size" {
+variable "loki_chart_version" {
   type    = string
-  default = "30Gi"
+  default = "7.3.0"
 }
 
-variable "eck_operator_chart_version" {
+variable "alloy_chart_version" {
   type    = string
-  default = "3.5.0"
-}
-
-variable "fluent_bit_chart_version" {
-  type    = string
-  default = "0.58.3"
+  default = "1.13.1"
 }

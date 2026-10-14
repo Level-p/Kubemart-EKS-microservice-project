@@ -18,16 +18,14 @@ output "argocd_admin_password_command" {
   value = module.argocd.admin_password_command
 }
 
-output "kibana_url" {
-  value = module.logging.kibana_url
-}
-
-output "kibana_password_command" {
-  value = module.logging.elastic_password_command
+output "log_bucket" {
+  description = "S3 bucket where Loki keeps the logs"
+  value       = module.logging.bucket
 }
 
 output "grafana_url" {
-  value = module.monitoring.grafana_url
+  description = "Metrics, logs (Explore > Loki) and alerts"
+  value       = module.monitoring.grafana_url
 }
 
 output "grafana_admin_password_command" {

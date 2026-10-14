@@ -42,7 +42,7 @@ PAYMENT_AMOUNT = Counter("payment_amount_cents_total", "Value of payments by res
 
 
 class JsonFormatter(logging.Formatter):
-    """One JSON object per log line, ready for Fluent Bit and Elasticsearch."""
+    """One JSON object per log line, ready for Grafana Alloy and Loki."""
 
     def format(self, record: logging.LogRecord) -> str:
         entry = {

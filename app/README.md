@@ -48,7 +48,8 @@ Each service has **its own database and its own user** (catalog, orders, payment
 ## Monitoring and logs
 
 - **Prometheus + Grafana** (metrics): every service exposes `/metrics` (orders: `/actuator/prometheus`), plus exporters for PostgreSQL and Valkey. The chart ships ServiceMonitors, **18 alerts** (PrometheusRule) and the **"KubeMart overview"** Grafana dashboard: requests, errors, latency, orders, revenue, payment declines, stock, cache hit ratio, database members and replication lag, Valkey memory, backup age.
-- **Elasticsearch + Kibana** (logs): every service writes one JSON line per event; Fluent Bit ships them.
+- **Loki** (logs, in the same Grafana): every service writes one JSON line per event; Grafana Alloy ships every container log and every Kubernetes event (OOMKilled, BackOff, failed probes) to Loki, labelled `namespace`, `pod`, `container` and `level`. The dashboard has a *Logs and Kubernetes events* row; *Explore > Loki* searches everything, e.g. `{namespace="kubemart-prod", container="orders", level="error"}`.
+- **Alerts to Slack**: Alertmanager posts every alert (firing and resolved) when the GitHub secret `ALERT_SLACK_WEBHOOK_URL` is set.
 - `/metrics` is blocked on the public ALB (fixed 404 response); Prometheus scrapes it inside the cluster.
 
 ## Run locally
