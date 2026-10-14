@@ -9,19 +9,19 @@ ingress:
   groupName: kubemart-prod
 services:
   frontend:
-    tag: 3-4daac6e
+    tag: 5-f6784fe
     autoscaling: {enabled: true, minReplicas: 2, maxReplicas: 6, targetCPU: 70}
   product-catalog:
-    tag: 3-4daac6e
+    tag: 5-f6784fe
     autoscaling: {enabled: true, minReplicas: 2, maxReplicas: 5, targetCPU: 70}
   cart:
-    tag: 3-4daac6e
+    tag: 5-f6784fe
     autoscaling: {enabled: true, minReplicas: 2, maxReplicas: 5, targetCPU: 70}
   orders:
-    tag: 3-4daac6e
+    tag: 5-f6784fe
     autoscaling: {enabled: true, minReplicas: 2, maxReplicas: 4, targetCPU: 70}
   payment:
-    tag: 3-4daac6e
+    tag: 5-f6784fe
     autoscaling: {enabled: true, minReplicas: 2, maxReplicas: 5, targetCPU: 70}
 # 3 PostgreSQL members (one per Availability Zone), synchronous replication:
 # a failover never loses a confirmed order or payment
