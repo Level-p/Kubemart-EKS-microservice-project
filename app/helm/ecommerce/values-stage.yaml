@@ -9,19 +9,19 @@ ingress:
   groupName: kubemart-stage
 services:
   frontend:
-    tag: 5-f6784fe
+    tag: 6-9dc9e0a
     replicas: 1
   product-catalog:
-    tag: 5-f6784fe
+    tag: 6-9dc9e0a
     replicas: 1
   cart:
-    tag: 5-f6784fe
+    tag: 6-9dc9e0a
     replicas: 1
   orders:
-    tag: 5-f6784fe
+    tag: 6-9dc9e0a
     replicas: 1
   payment:
-    tag: 5-f6784fe
+    tag: 6-9dc9e0a
     replicas: 1
 # Same 3-member setup as prod, so failovers can be rehearsed here first.
 # Asynchronous replication is enough for test data and a little faster.
